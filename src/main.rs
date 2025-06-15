@@ -81,8 +81,8 @@ where
         let artifact: HardhatArtifact = serde_json::from_str(artifact_str)?;
         let interface = Interface::new(artifact.abi);
 
-        // Aave V3 Pool address on Base mainnet
-        let pool_addr: Address = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5".parse()?;
+        // Aave V3 Pool address on Base Sepolia testnet
+        let pool_addr: Address = "0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b".parse()?;
         let pool_contract = interface.connect(pool_addr, provider.clone());
 
         // For now, liquidator contract is optional

@@ -5,6 +5,7 @@ This document outlines the steps needed to turn the current prototype into a ful
 ## Current Status
 
 - Rust workspace created using **alloy-rs** for Ethereum interactions.
+- `AaveLiquidator.sol` contract deployed to Base Sepolia testnet at `0x4818d1cb788C733Ae366D6d1D463EB48A0544528`.
 - Prototype in `src/main.rs` connects to Base RPC, loads the L2Pool ABI, and prints the health factor of a target user.
 - Basic README with quick-start instructions.
 
