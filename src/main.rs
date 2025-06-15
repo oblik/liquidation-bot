@@ -3,7 +3,13 @@ use alloy_json_abi::JsonAbi;
 use alloy_primitives::{Address, U256};
 use alloy_provider::ProviderBuilder;
 use anyhow::Result;
+use serde::Deserialize;
 use std::sync::Arc;
+
+#[derive(Deserialize)]
+struct HardhatArtifact {
+    abi: JsonAbi,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,10 +23,10 @@ async fn main() -> Result<()> {
     let provider = ProviderBuilder::new().connect_http(url);
     let provider = Arc::new(provider);
 
-    // load ABI of L2Pool
-    let abi_str = include_str!("../abi/L2Pool.json");
-    let abi: JsonAbi = serde_json::from_str(abi_str)?;
-    let interface = Interface::new(abi);
+    // load ABI of L2Pool from Hardhat artifact
+    let artifact_str = include_str!("../abi/L2Pool.json");
+    let artifact: HardhatArtifact = serde_json::from_str(artifact_str)?;
+    let interface = Interface::new(artifact.abi);
 
     // Aave V3 Pool address on Base mainnet
     let pool_addr: Address = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5".parse()?;
