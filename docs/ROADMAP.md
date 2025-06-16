@@ -1,65 +1,37 @@
 # Liquidation Bot Roadmap
 
-This document outlines the steps needed to turn the current prototype into a fully featured Aave v3 liquidation bot on the Base network. The plan is derived from the deep research notes.
+This document outlines the development status and next steps for the Aave v3 liquidation bot.
 
-## Current Status
+## Phase 1: Core Infrastructure (COMPLETED)
 
-- Rust workspace created using **alloy-rs** for Ethereum interactions.
-- Prototype in `src/main.rs` connects to Base RPC, loads the L2Pool ABI, and prints the health factor of a target user.
-- Basic README with quick-start instructions.
+- [x] **Smart Contract**: `AaveLiquidator.sol` contract written and deployed to Base Sepolia testnet at `0x4818d1cb788C733Ae366D6d1D463EB48A0544528`. Includes flash loan receiver, L2Pool integration, and security features.
+- [x] **Rust Bot Foundation**: Initial prototype in `src/main.rs` connecting to Base RPC and checking a single user's health factor.
+- [x] **Configuration & Logging**: Initial setup for environment variables and `tracing`.
 
-This confirms that on-chain calls through alloy work. Everything else remains to be implemented.
+## Phase 2: Real-Time Monitoring (IN PROGRESS)
 
-## Next Steps
+### Completed
+- [x] **WebSocket Event Subscriptions**: Subscribes to all Aave Pool events (`Borrow`, `Repay`, `Supply`, etc.) for real-time data.
+- [x] **Dynamic User Discovery**: The bot now automatically discovers and monitors any user who interacts with the Aave protocol.
+- [x] **Database Persistence**: Integrated `sqlx` with SQLite (and PostgreSQL support) to store user positions, bot events, and liquidation history.
+- [x] **Concurrent Architecture**: Re-architected into a multi-task `tokio` application for high-performance, non-blocking monitoring.
+- [x] **Graceful Fallback**: The bot intelligently detects if a WebSocket connection is available and falls back to HTTP polling if not.
 
-### 1. Smart Contract for Flash Loan Liquidations
-- Write a Solidity contract (`AaveLiquidator`) implementing `IFlashLoanReceiver`.
-- Integrate with Aave's L2Pool flash loan function to borrow the debt asset.
-- Execute `liquidationCall` using the packed parameters for Base.
-- Include swap logic (e.g. via Uniswap) to convert seized collateral back to the debt asset within the same transaction.
-- Restrict callable functions with an `onlyOwner` modifier and implement `withdraw()` to reclaim profits.
+### Next Steps
+- [ ] **Oracle Price Monitoring**: Integrate with Chainlink price feeds to monitor for price changes that affect health factors, providing a second trigger for liquidations beyond direct user actions.
+- [ ] **Profitability Calculation**: Implement logic to accurately estimate the profitability of a liquidation opportunity, considering the liquidation bonus, flash loan fees, DEX swap slippage, and gas costs.
+- [ ] **Liquidation Execution**: Implement the final logic to call the `AaveLiquidator` smart contract, sending a transaction to execute a liquidation when a profitable opportunity is found.
 
-### 2. Rust Bindings and Execution Module
-- Generate bindings for the new contract with alloy build tooling.
-- Implement a `liquidate()` function in Rust to send transactions to the contract, estimating gas and using adjustable gas prices.
-- Handle pending transaction tracking and confirmation.
-
-### 3. Monitoring and Data Pipeline
-- Subscribe to Aave Pool events (Borrow, Repay, Supply, Withdraw) over WebSockets to update user positions in real time.
-- Periodically poll the Chainlink price oracle for volatile assets.
-- Maintain an in-memory or database-backed list of users near the liquidation threshold.
-- Optionally seed the watch list from The Graph's subgraph at startup.
-
-### 4. Profitability Estimation
-- Fetch liquidation bonus and close factor parameters from on-chain or static config.
-- Calculate expected profit from repaying a user's debt after accounting for flash loan fees, estimated swap slippage, and gas cost.
-- Skip opportunities that do not meet the minimum profitability threshold.
-
-### 5. Concurrency and Task Orchestration
-- Use Tokio tasks and channels to decouple monitoring from execution.
-- Ensure no duplicate liquidation attempts occur for the same user.
-- Support parallel liquidations across independent signers if needed.
-
-### 6. Persistence and Logging
-- Integrate `sqlx` with SQLite or Postgres to store user data and executed liquidations.
-- Add structured logging with the `tracing` crate.
-- Optionally expose Prometheus metrics for monitoring.
-
-### 7. Deployment and Operations
-- Containerize the bot with Docker and provide a sample `docker-compose` setup.
-- Document environment variables (RPC endpoints, private key, DB URL, etc.).
-- Implement alerting/heartbeat mechanism so the operator knows the bot is running.
-
-### 8. Testing and Simulation
-- Deploy contracts and run the bot on Base testnet or a local fork for end-to-end testing.
-- Use Tenderly or anvil fork to simulate historical scenarios and verify profit calculations.
-- Backtest using historical liquidation data (from Dune or The Graph) to tune parameters.
-
-### 9. Continuous Improvement
-- Track success and failure rates to refine gas pricing strategy and latency.
-- Update asset mappings and ABI files whenever Aave upgrades or adds new reserves.
-- Periodically withdraw accumulated profits to a cold wallet for security.
+## Phase 3: Production Hardening & Optimization (UPCOMING)
+- [ ] **Advanced Error Handling & Retries**: Implement more robust strategies for handling failed transactions and RPC endpoint issues.
+- [ ] **Gas Price Strategy**: Develop a dynamic gas pricing model to ensure transactions are mined competitively without overpaying.
+- [ ] **Multi-Asset & Multi-Collateral Logic**: Enhance profitability calculations to choose the best debt asset to repay and collateral to seize.
+- [ ] **Testing & Simulation**: Create a framework for backtesting strategies against historical data and simulating liquidations on forked networks.
+- [ ] **Containerization**: Provide a `Dockerfile` and `docker-compose` setup for easy deployment.
+- [ ] **Alerting & Dashboards**: Integrate with services like Prometheus, Grafana, or messaging apps to provide real-time alerts and performance dashboards.
+- [ ] **Security Audits**: Perform thorough security reviews of both the smart contract and the off-chain bot.
+- [ ] **Continuous Improvement**: Ongoing work to refine strategies, update to new Aave versions, and manage profits securely.
 
 ## Conclusion
 
-Completing these milestones will transform the current simple health factor check into a production-grade liquidation bot. Each phase builds on the previous one, with the smart contract and monitoring system being the next major pieces to implement.
+The core monitoring engine is now complete and functional. The next critical steps involve integrating price oracle data and building the profitability models to allow the bot to make informed, autonomous liquidation decisions.

@@ -5,33 +5,23 @@ This is a sophisticated Aave v3 liquidation bot for the Base network, written in
 ## ✅ Current Status
 
 **Phase 1: Core Infrastructure (COMPLETED)**
-- [x] **Smart Contract (`AaveLiquidator.sol`)**
-  - Implements `IFlashLoanReceiver` for Aave flash loans
-  - Executes atomic liquidations with Uniswap V3 swaps  
-  - Uses L2Pool encoding for gas efficiency on Base
-  - Includes security features: reentrancy protection, owner-only functions
-  - Compiles successfully with Hardhat
+- [x] **Smart Contract (`AaveLiquidator.sol`)**: Deployed and ready for flash loan liquidations.
+- [x] **Rust Bot Foundation**: Basic health factor checking and configuration.
 
-- [x] **Rust Bot (`src/main.rs`)**
-  - Modern alloy-rs integration for Ethereum connectivity
-  - Health factor monitoring with structured logging
-  - Configuration via environment variables
-  - Modular architecture ready for expansion
-  - Comprehensive error handling
+**Phase 2: Event Monitoring (IN PROGRESS)**
+- [x] **WebSocket Subscriptions**: Real-time monitoring of all Aave Pool events.
+- [x] **Dynamic User Discovery**: Automatically detects and monitors all active Aave users.
+- [x] **Database Integration**: Persists user positions and bot events to a database (SQLite/PostgreSQL).
+- [ ] **Oracle Price Monitoring**: Directly monitor Chainlink price feeds to react instantly to market volatility.
+- [ ] **Profitability Calculation**: Implement logic to calculate the exact profit of a liquidation.
 
-- [x] **Infrastructure**
-  - Hardhat setup for contract compilation and deployment
-  - TypeScript typing generation
-  - Multi-network support (Base mainnet/testnet)
-  - Deployment scripts and configuration
+## 🔄 Next Steps
 
-## 🔄 Next Steps (Phase 2: Event Monitoring)
-
-The foundation is complete. Next priorities from the [roadmap](docs/ROADMAP.md):
-- [ ] WebSocket event subscriptions for real-time monitoring
-- [ ] Oracle price monitoring integration
-- [ ] Database persistence for user positions
-- [ ] Advanced profitability calculations
+The next priorities from the [roadmap](docs/ROADMAP.md) are to complete Phase 2:
+- Implement **Oracle Price Monitoring**.
+- Implement **Profitability Calculation With Gas Estimation**.
+- Enable full **Liquidation Execution**.
+- Implement **Multi-Asset Liquidation Strategies**.
 
 ## Quick Start
 
@@ -89,26 +79,28 @@ RUST_LOG=debug cargo run
 - **Security**: Owner-only functions, reentrancy guards, slippage protection
 - **Profit Management**: Automated profit extraction and withdrawal functions
 
-### Rust Bot Features  
-- **Health Factor Monitoring**: Real-time checking of user liquidation status
-- **Alloy Integration**: Modern Ethereum library with type-safe contract bindings
-- **Async Architecture**: Tokio-based for high-performance concurrent operations
-- **Structured Logging**: Comprehensive tracing for debugging and monitoring
-- **Configuration**: Environment-based setup with sensible defaults
+### Rust Bot Features
+- **Real-Time Event Monitoring**: Subscribes to Aave Pool events (Borrow, Repay, Supply, etc.) over WebSockets for instant user activity detection.
+- **Dynamic User Discovery**: Automatically discovers and tracks all users interacting with the Aave protocol, not just a single target.
+- **Database Integration**: Uses SQLite (or PostgreSQL) to persist user positions, at-risk users, and bot events for analysis and statefulness.
+- **Concurrent Architecture**: Employs a multi-tasking `tokio` architecture for high-performance, non-blocking operations.
+- **Intelligent Fallback**: Automatically reverts to HTTP polling if a WebSocket connection is not available.
+- **Alloy Integration**: Modern Ethereum library with type-safe contract bindings.
+- **Structured Logging**: Comprehensive `tracing` for debugging and monitoring.
+- **Advanced Configuration**: Detailed environment-based setup, documented in `docs/CONFIGURATION.md`.
 
 ## Key Advantages
 
-1. **Base Network Optimized**: Leverages L2Pool for 60%+ gas savings
-2. **Modern Tech Stack**: Uses latest Rust and Ethereum tooling
-3. **Atomic Execution**: Flash loans ensure profitable liquidations or no action
-4. **Comprehensive Documentation**: Detailed research and implementation guides
-5. **Production Ready**: Security features, error handling, and monitoring built-in
+1. **Base Network Optimized**: Leverages L2Pool for 60%+ gas savings.
+2. **Modern Tech Stack**: Uses latest Rust and Ethereum tooling (Alloy, Tokio).
+3. **Real-Time & Proactive**: Instead of just polling, the bot reacts to on-chain events the moment they happen.
 
 ## Documentation
 
-- **[Setup Guide](SETUP.md)**: Detailed installation and configuration
-- **[Research](docs/liquidation-bot-research.md)**: 75KB comprehensive technical analysis
-- **[Roadmap](docs/ROADMAP.md)**: Development phases and future features
+- **[Setup Guide](SETUP.md)**: Detailed installation and configuration.
+- **[Configuration](docs/CONFIGURATION.md)**: In-depth guide to all environment variables.
+- **[Research](docs/liquidation-bot-research.md)**: 75KB comprehensive technical analysis.
+- **[Roadmap](docs/ROADMAP.md)**: Development phases and future features.
 - **[Contract](contracts/AaveLiquidator.sol)**: Fully documented Solidity implementation
 
 ## Network Information
@@ -122,13 +114,14 @@ RUST_LOG=debug cargo run
 ## Example Output
 
 ```
-2024-01-15T10:30:45.123Z INFO Starting Aave v3 Liquidation Bot on Base
-2024-01-15T10:30:45.150Z INFO Configuration loaded
-2024-01-15T10:30:45.200Z INFO Provider connected to: https://mainnet.base.org
-2024-01-15T10:30:45.250Z INFO Testing with target user: 0x1234...
-2024-01-15T10:30:45.300Z INFO User 0x1234... - Health Factor: 1150000000000000000, Liquidatable: false
-2024-01-15T10:30:45.301Z INFO ✅ Target user is healthy. Health Factor: 1150000000000000000
-2024-01-15T10:30:45.302Z INFO Starting monitoring loop...
+INFO liquidation_bot: 🚀 Starting Aave v3 Liquidation Bot with Real-Time WebSocket Monitoring
+INFO liquidation_bot: ✅ WebSocket connection established successfully!
+INFO liquidation_bot: 🤖 Liquidation bot initialized with real-time WebSocket monitoring
+INFO liquidation_bot: ✅ Successfully subscribed to Aave Pool events!
+INFO liquidation_bot: 🎧 Listening for real-time Aave events...
+WARN liquidation_bot: ⚠️  User 0xdb3e... is at risk. Health Factor: 1.094
+INFO liquidation_bot: Scanning 1 at-risk users...
+WARN liquidation_bot: ⚠️  User 0xdb3e... is at risk. Health Factor: 1.093
+INFO liquidation_bot: 📊 Status Report: 3 positions tracked, 1 at risk, 0 liquidatable
 ```
 
-This bot represents a complete foundation for Aave v3 liquidations on Base, with production-ready smart contracts and a modern Rust implementation ready for the next phase of development.
