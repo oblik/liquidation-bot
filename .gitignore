@@ -16,4 +16,9 @@ node_modules
 
 cache/
 artifacts/
+<<<<<<< HEAD
 >>>>>>> 7f648de (feat: Implement Real-Time Event Monitoring System)
+=======
+/artifacts
+/cache
+>>>>>>> 56a8043 (Stop tracking artifacts directory)
