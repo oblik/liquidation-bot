@@ -2,59 +2,56 @@
 
 ## Overview
 
-This is an Aave v3 liquidation bot for Base network written in Rust using alloy-rs. The bot monitors user health factors and can execute profitable liquidations using flash loans.
+This is an Aave v3 liquidation bot for the Base network, written in Rust using modern `alloy-rs` libraries. The bot uses real-time WebSocket subscriptions to monitor Aave V3 events, dynamically discovers at-risk users, and persists data to a database.
 
-## Current Status
+## Current Status (Phase 2: In Progress)
 
-✅ **Completed:**
-- Basic Rust workspace with alloy-rs integration
-- Health factor monitoring for target users
-- Smart contract for flash loan liquidations (`AaveLiquidator.sol`)
-- Comprehensive logging and error handling
-- Modular architecture ready for expansion
+- ✅ **Real-Time Monitoring**: The bot connects to a WebSocket endpoint to listen to all Aave Pool events.
+- ✅ **Dynamic User Discovery**: The bot automatically finds and tracks any user interacting with the Aave protocol.
+- ✅ **Database Persistence**: User positions and bot activity are saved to a SQLite or PostgreSQL database.
+- ✅ **Concurrent Architecture**: The bot is built on Tokio and handles multiple tasks in parallel for high performance.
+- 🚧 **Next Up**: Implementing oracle price monitoring and profitability calculations.
 
-🔄 **In Progress:**
-- Contract deployment and integration
-- Event-driven monitoring system
-- Profitability estimation
-- Database persistence
+---
 
 ## Quick Start
 
 ### 1. Prerequisites
 
-- Rust 1.70+ installed
-- Node.js and npm (for contract compilation)
-- Base network RPC access
-- Private key with some ETH for gas
+- Rust 1.70+
+- Node.js and npm (for smart contract management)
+- A Base Sepolia WebSocket RPC endpoint (e.g., from [Alchemy](https://alchemy.com/), [QuickNode](https://quicknode.com/))
+- A private key with some Base Sepolia ETH for gas.
 
 ### 2. Environment Setup
 
-Create a `.env` file with the following variables:
+Create a `.env` file from the example. For a detailed explanation of every variable, see `docs/CONFIGURATION.md`.
 
 ```bash
-# Base RPC URL (required)
-RPC_URL=https://mainnet.base.org
+# Get a free WebSocket endpoint from a provider like Alchemy
+# This is required for real-time monitoring.
+WS_URL=wss://base-sepolia.g.alchemy.com/v2/YOUR_API_KEY
 
-# Private key for the bot wallet (required)
+# This is used for sending transactions.
+RPC_URL=https://sepolia.base.org
+
 # WARNING: Keep this secure and never commit to version control
 PRIVATE_KEY=your_private_key_here
 
-# Target user address to monitor (optional, for testing)
-TARGET_USER=0x1234567890123456789012345678901234567890
+# The deployed AaveLiquidator contract on Base Sepolia
+LIQUIDATOR_CONTRACT=0x4818d1cb788C733Ae366D6d1D463EB48A0544528
 
-# Liquidator contract address (optional, set after deployment)
-LIQUIDATOR_CONTRACT=0xYourLiquidatorContractAddressHere
+# Optional: Monitor a specific user for testing purposes
+# Leave blank to monitor the entire Aave market
+TARGET_USER=
 
-# Minimum profit threshold in wei (optional, default: 5 ETH)
-MIN_PROFIT_THRESHOLD=5000000000000000000
+# Path to the database file
+DATABASE_URL=sqlite:liquidation_bot.db
 
-# Gas price multiplier for competitive bidding (optional, default: 2)
-GAS_PRICE_MULTIPLIER=2
-
-# Logging level (optional)
+# Log level (error, warn, info, debug)
 RUST_LOG=info
 ```
+*If you do not provide a `WS_URL`, the bot will fall back to slower HTTP polling.*
 
 ### 3. Install Dependencies
 
@@ -62,100 +59,76 @@ RUST_LOG=info
 # Install Rust dependencies
 cargo build
 
-# Install Node.js dependencies for contract compilation
+# Install Node.js dependencies
 npm install
 ```
 
-### 4. Deploy Smart Contract
+### 4. Run the Bot
 
 ```bash
-# Compile contracts
-npm run compile
-
-# Deploy to Base mainnet
-npm run deploy
-
-# Copy the deployed contract address to your .env file as LIQUIDATOR_CONTRACT
-```
-
-### 5. Run the Bot
-
-```bash
-# Run in monitoring mode
+# Run in real-time monitoring mode
 cargo run --release
 
-# Run with debug logging
+# Run with detailed debug logging
 RUST_LOG=debug cargo run
 ```
+The bot will connect to the WebSocket endpoint, initialize the database, and begin listening for Aave events.
 
 ## Architecture
 
-The bot consists of several key components:
+The bot is architected for high performance and reliability.
 
 ### 1. Smart Contract (`AaveLiquidator.sol`)
-- Implements `IFlashLoanReceiver` for Aave flash loans
-- Executes atomic liquidations with Uniswap swaps
-- Uses L2Pool encoding for gas efficiency on Base
-- Includes profit withdrawal and security features
+- Deployed contract that can execute flash-loan-powered liquidations atomically.
+- Secured with `onlyOwner` and reentrancy guards.
 
 ### 2. Monitoring System (`src/main.rs`)
-- Checks user health factors via Aave Pool contract
-- Configurable monitoring intervals
-- Structured logging with tracing
+- **WebSocket Listener**: Subscribes to on-chain Aave events for real-time data.
+- **Dynamic User Tracking**: Discovers users from events and adds them to a monitoring list.
+- **Concurrent Processing**: Uses `tokio` tasks to manage event listening, database writes, and health checks simultaneously.
+- **Database Backend**: Persists all discovered user positions and bot activity, allowing state to be maintained across restarts.
 
-### 3. Configuration
-- Environment-based configuration
-- Support for multiple networks (Base mainnet/testnet)
-- Flexible profit thresholds and gas strategies
+### 3. Configuration System
+- All settings are managed via a `.env` file.
+- See `docs/CONFIGURATION.md` for a complete list of options.
 
 ## Key Features
 
-### Flash Loan Liquidations
-The `AaveLiquidator` contract can:
-- Borrow assets via Aave flash loans
-- Execute liquidations using L2Pool (gas optimized)
-- Swap collateral via Uniswap V3
-- Automatically repay flash loans
-- Extract and secure profits
-
 ### Monitoring
-- Real-time health factor monitoring
-- Support for specific target users (testing)
-- Extensible to event-driven monitoring
-- Comprehensive logging
+- **Real-Time Event-Driven**: Reacts instantly to on-chain events rather than relying on slow polling.
+- **Market-Wide Surveillance**: Monitors all user activity on the Aave V3 Pool, not just a predefined list.
+- **Persistent State**: The database ensures that knowledge of at-risk users is not lost if the bot restarts.
+- **Status Reporting**: Logs regular updates on the number of users tracked and at risk.
 
-### Safety Features
-- Owner-only contract functions
-- Reentrancy protection
-- Slippage protection on swaps
-- Minimum profit thresholds
-- Emergency withdrawal functions
+### Flash Loan Liquidations (Ready for Execution)
+- The `AaveLiquidator` contract is deployed and can be called by the bot owner to:
+  - Borrow assets via Aave flash loans.
+  - Execute liquidations using gas-optimized L2Pool functions.
+  - Swap seized collateral via Uniswap V3 to repay the loan.
+  - Extract and secure profits.
 
-## Development Roadmap
+## Troubleshooting
 
-### Phase 1: Core Infrastructure ✅
-- [x] Smart contract development
-- [x] Basic Rust integration
-- [x] Health factor monitoring
-- [x] Configuration system
+### WebSocket Connection Errors
+- **Verify `WS_URL`**: Ensure your WebSocket endpoint is correct and your API key is valid.
+- **Provider Issues**: Public RPCs often don't support WebSockets. Use a dedicated provider like Alchemy.
+- **Firewall**: Check for network restrictions that might block the connection.
 
-### Phase 2: Event Monitoring 🔄
-- [ ] WebSocket event subscriptions
-- [ ] Oracle price monitoring
-- [ ] User position tracking
-- [ ] Database persistence
+### Database Errors
+- **File Permissions**: If using SQLite, ensure the bot has write permissions in the project directory.
+- **Connection String**: If using PostgreSQL, double-check your `DATABASE_URL`.
+- **File Not Found**: The bot creates the SQLite file automatically, but ensure the directory is writable.
 
-### Phase 3: Advanced Features
-- [ ] Profit estimation algorithms
-- [ ] Gas optimization strategies
-- [ ] Multi-asset liquidations
-- [ ] Performance metrics
+### Common Issues
+- **RPC Timeouts**: Public HTTP RPC endpoints can be unreliable. Consider a dedicated provider for `RPC_URL` as well.
+- **No Events Detected**: Ensure you are connected to the correct network (Base Sepolia) where there is activity. If the market is quiet, no events will be emitted.
 
-### Phase 4: Production
-- [ ] Comprehensive testing
-- [ ] Security audits
-- [ ] Deployment automation
-- [ ] Monitoring dashboards
+## Contributing
+This project follows the roadmap in `docs/ROADMAP.md`. Key areas for the next phase of contribution are:
+1.  **Price Oracles**: Integrate Chainlink feeds.
+2.  **Profitability Engine**: Build the profit calculation logic.
+3.  **Execution Logic**: Implement the final transaction-sending step.
+4.  **Testing**: Add a robust testing and simulation suite.
 
 ## Network Information
 
@@ -185,42 +158,6 @@ The `AaveLiquidator` contract can:
    - Monitor bot health and performance
    - Set up alerts for unusual activity
    - Regular withdrawal of accumulated profits
-
-## Troubleshooting
-
-### Common Issues
-
-1. **RPC Connection Errors**
-   - Verify RPC_URL is correct and accessible
-   - Check network connectivity
-   - Try alternative RPC endpoints
-
-2. **Transaction Failures**
-   - Ensure sufficient ETH balance for gas
-   - Check gas price settings
-   - Verify contract addresses
-
-3. **Health Factor Parsing**
-   - Confirm target user has active positions
-   - Check Aave protocol status
-   - Verify ABI compatibility
-
-### Logs and Debugging
-
-Set `RUST_LOG=debug` for detailed logging:
-```bash
-RUST_LOG=debug cargo run
-```
-
-## Contributing
-
-This project follows the roadmap outlined in `docs/ROADMAP.md`. Key areas for contribution:
-
-1. **Event System:** Implement WebSocket-based event monitoring
-2. **Database:** Add PostgreSQL/SQLite integration for persistence
-3. **Profitability:** Enhance profit calculation algorithms
-4. **Testing:** Add comprehensive test coverage
-5. **Documentation:** Improve setup and operational guides
 
 ## Support
 

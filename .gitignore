@@ -1,4 +1,19 @@
+# Rust artifacts
 /target
 **/*.rs.bk
+
+# Node artifacts
+/node_modules
+
+# Environment files
 .env
+<<<<<<< HEAD
 node_modules
+=======
+
+# Database files
+*.db
+
+cache/
+artifacts/
+>>>>>>> 7f648de (feat: Implement Real-Time Event Monitoring System)
