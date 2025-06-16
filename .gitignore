@@ -2,5 +2,3 @@
 **/*.rs.bk
 .env
 node_modules
-cache/
-artifacts/
