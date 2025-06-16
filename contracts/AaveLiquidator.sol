@@ -19,14 +19,14 @@ import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRoute
 contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // Aave v3 Pool address on Base Sepolia testnet
-    address private constant POOL_ADDRESS = 0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b;
+    // Aave v3 Pool address on Base mainnet
+    address private constant POOL_ADDRESS = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
     
-    // Aave v3 PoolAddressesProvider on Base Sepolia testnet  
-    address private constant ADDRESSES_PROVIDER_ADDRESS = 0x0d8a1359d96FAA08FC68f5d23Ca5C0e7E5DfFe17;
+    // Aave v3 PoolAddressesProvider on Base mainnet
+    address private constant ADDRESSES_PROVIDER_ADDRESS = 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e;
     
-    // Uniswap V3 SwapRouter on Base Sepolia (if available, or use mainnet for testing)
-    address public constant SWAP_ROUTER = 0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4;
+    // Uniswap V3 SwapRouter on Base
+    address public constant SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
     
     // Maximum slippage tolerance (5% in basis points)
     uint256 public constant MAX_SLIPPAGE = 500;

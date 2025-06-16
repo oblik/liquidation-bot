@@ -165,11 +165,9 @@ The `AaveLiquidator` contract can:
 - **Aave Pool:** `0xA238Dd80C259a72e81d7e4664a9801593F98d1c5`
 - **Block Time:** ~2 seconds
 
-### Base Sepolia (Testnet)
-- **RPC URL:** `https://sepolia.base.org`
-- **Chain ID:** 84532
-- **Aave Pool:** `0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b`
-- **Deployed Liquidator Contract:** `0x4818d1cb788C733Ae366D6d1D463EB48A0544528`
+### Base Goerli (Testnet)
+- **RPC URL:** `https://goerli.base.org`
+- **Chain ID:** 84531
 
 ## Security Considerations
 

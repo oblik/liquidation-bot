@@ -119,24 +119,16 @@ RUST_LOG=debug cargo run
 - Aave Pool: `0xA238Dd80C259a72e81d7e4664a9801593F98d1c5`
 - Block Time: ~2 seconds
 
-**Base Sepolia Testnet**
-- Chain ID: 84532
-- RPC: `https://sepolia.base.org`
-- Aave Pool: `0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b`
-- Uniswap Router: `0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4`
-- Deployed Liquidator Contract: `0x4818d1cb788C733Ae366D6d1D463EB48A0544528`
-
 ## Example Output
 
 ```
-INFO  liquidation_bot: Starting Aave v3 Liquidation Bot on Base
-INFO  liquidation_bot: Configuration loaded
-INFO  liquidation_bot: Provider connected to: https://sepolia.base.org
-INFO  liquidation_bot: Testing with target user: 0xa1fea...
-INFO  liquidation_bot: Checking health factor for user: 0xa1fea...
-INFO  liquidation_bot: User 0xa1fea... - Health Factor: 1157... (MAX), Liquidatable: false
-INFO  liquidation_bot: ✅ Target user is healthy. Health Factor: 1157... (MAX)
-INFO  liquidation_bot: Starting monitoring loop...
+2024-01-15T10:30:45.123Z INFO Starting Aave v3 Liquidation Bot on Base
+2024-01-15T10:30:45.150Z INFO Configuration loaded
+2024-01-15T10:30:45.200Z INFO Provider connected to: https://mainnet.base.org
+2024-01-15T10:30:45.250Z INFO Testing with target user: 0x1234...
+2024-01-15T10:30:45.300Z INFO User 0x1234... - Health Factor: 1150000000000000000, Liquidatable: false
+2024-01-15T10:30:45.301Z INFO ✅ Target user is healthy. Health Factor: 1150000000000000000
+2024-01-15T10:30:45.302Z INFO Starting monitoring loop...
 ```
 
 This bot represents a complete foundation for Aave v3 liquidations on Base, with production-ready smart contracts and a modern Rust implementation ready for the next phase of development.

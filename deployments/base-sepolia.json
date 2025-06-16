@@ -1,8 +1,0 @@
-{
-  "network": "base-sepolia",
-  "contractAddress": "0x4818d1cb788C733Ae366D6d1D463EB48A0544528",
-  "deployerAddress": "0xA1Fea2492FDf821a0e78026aECa64DF14C4c1506",
-  "deploymentTx": "0x4f14e72a73d2bc138d5d05082bee17b3c00ca5e1f0016c02df78acd3db8d8bce",
-  "blockNumber": 27129483,
-  "timestamp": "2025-06-15T22:41:07.449Z"
-} 
