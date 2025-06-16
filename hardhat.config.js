@@ -1,6 +1,6 @@
 require("@nomiclabs/hardhat-waffle");
 require("@nomiclabs/hardhat-ethers");
-require("@typechain/hardhat");
+// require("@typechain/hardhat"); // Temporarily disabled
 
 // Load environment variables
 require('dotenv').config();
@@ -28,19 +28,19 @@ module.exports = {
       gasPrice: "auto",
       gas: "auto"
     },
-    "base-goerli": {
-      url: process.env.BASE_GOERLI_RPC || "https://goerli.base.org",
+    "base-sepolia": {
+      url: process.env.BASE_SEPOLIA_RPC || "https://sepolia.base.org",
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       gasPrice: "auto",
       gas: "auto"
     }
   },
-  typechain: {
-    outDir: "typechain-types",
-    target: "ethers-v5",
-    alwaysGenerateOverloads: false,
-    externalArtifacts: ["node_modules/@aave/core-v3/artifacts/contracts/**/*.sol/*.json"]
-  },
+  // typechain: {
+  //   outDir: "typechain-types",
+  //   target: "ethers-v5",
+  //   alwaysGenerateOverloads: false,
+  //   externalArtifacts: ["node_modules/@aave/core-v3/artifacts/contracts/**/*.sol/*.json"]
+  // },
   paths: {
     sources: "./contracts",
     tests: "./test",
