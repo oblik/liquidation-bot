@@ -11,17 +11,17 @@ tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 anyhow = "1"
 
-# Ethereum and Alloy
-alloy-provider = { version = "1.0.9", features = ["reqwest", "ws"] }
-alloy-transport = "1.0.9"
-alloy-contract = "1.0.9"
-alloy-primitives = "1.0.9"
-alloy-json-abi = "1.2.0"
-alloy-dyn-abi = "1.2.0"
-alloy-sol-types = "1.0.9"
-alloy-rpc-types = "1.0.9"
-alloy-signer = "1.0.9"
-alloy-signer-local = "1.0.9"
+# Ethereum and Alloy - Using compatible 1.0.x versions
+alloy-provider = { version = "1.0", features = ["reqwest", "ws"] }
+alloy-transport = "1.0"
+alloy-contract = "1.0"
+alloy-primitives = "1.0"
+alloy-json-abi = "1.0"
+alloy-dyn-abi = "1.0"
+alloy-sol-types = "1.0"
+alloy-rpc-types = "1.0"
+alloy-signer = "1.0"
+alloy-signer-local = "1.0"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
