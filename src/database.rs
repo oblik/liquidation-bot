@@ -1,8 +1,8 @@
+use crate::models::UserPosition;
 use alloy_primitives::Address;
 use eyre::Result;
 use sqlx::{Pool, Row, Sqlite};
 use tracing::info;
-use crate::models::UserPosition;
 
 pub async fn init_database(database_url: &str) -> Result<Pool<Sqlite>> {
     let pool = sqlx::SqlitePool::connect(database_url).await?;
@@ -134,9 +134,14 @@ pub async fn log_monitoring_event(
 }
 
 pub async fn get_at_risk_users(db_pool: &Pool<Sqlite>) -> Result<Vec<Address>> {
-    let rows = sqlx::query("SELECT address FROM user_positions WHERE is_at_risk = TRUE")
-        .fetch_all(db_pool)
-        .await?;
+    let rows = sqlx::query(
+        "SELECT address FROM user_positions 
+         WHERE is_at_risk = TRUE OR total_debt_base != '0' 
+         ORDER BY health_factor ASC 
+         LIMIT 100",
+    )
+    .fetch_all(db_pool)
+    .await?;
 
     let mut users = Vec::new();
     for row in rows {
