@@ -12,13 +12,12 @@ This is a sophisticated Aave v3 liquidation bot for the Base network, written in
 - [x] **WebSocket Subscriptions**: Real-time monitoring of all Aave Pool events.
 - [x] **Dynamic User Discovery**: Automatically detects and monitors all active Aave users.
 - [x] **Database Integration**: Persists user positions and bot events to a database (SQLite/PostgreSQL).
-- [ ] **Oracle Price Monitoring**: Directly monitor Chainlink price feeds to react instantly to market volatility.
+- [x] **Oracle Price Monitoring**: Directly monitor Chainlink price feeds to react instantly to market volatility (core implementation).
 - [ ] **Profitability Calculation**: Implement logic to calculate the exact profit of a liquidation.
 
 ## 🔄 Next Steps
 
 The next priorities from the [roadmap](docs/ROADMAP.md) are to complete Phase 2:
-- Implement **Oracle Price Monitoring**.
 - Implement **Profitability Calculation With Gas Estimation**.
 - Enable full **Liquidation Execution**.
 - Implement **Multi-Asset Liquidation Strategies**.
