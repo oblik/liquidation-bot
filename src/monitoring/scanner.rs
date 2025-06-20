@@ -23,6 +23,31 @@ fn format_health_factor(hf: U256) -> String {
     format!("{} ({:.3})", hf, hf_f64)
 }
 
+/// Helper function to safely parse U256 from contract call result
+fn parse_u256_from_result(
+    result: &[alloy_dyn_abi::DynSolValue],
+    index: usize,
+    field_name: &str,
+) -> Result<U256> {
+    let value = result.get(index).ok_or_else(|| {
+        eyre::eyre!(
+            "Missing result at index {} for field '{}'",
+            index,
+            field_name
+        )
+    })?;
+
+    let uint_value = value.as_uint().ok_or_else(|| {
+        eyre::eyre!(
+            "Failed to parse field '{}' as uint at index {}",
+            field_name,
+            index
+        )
+    })?;
+
+    Ok(uint_value.0)
+}
+
 pub async fn check_user_health<P>(
     _provider: Arc<P>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
@@ -38,13 +63,14 @@ where
     let call = pool_contract.function("getUserAccountData", &args)?;
     let result = call.call().await?;
 
-    // Parse the result
-    let total_collateral_base = result[0].as_uint().unwrap().0;
-    let total_debt_base = result[1].as_uint().unwrap().0;
-    let available_borrows_base = result[2].as_uint().unwrap().0;
-    let current_liquidation_threshold = result[3].as_uint().unwrap().0;
-    let ltv = result[4].as_uint().unwrap().0;
-    let health_factor = result[5].as_uint().unwrap().0;
+    // Parse the result with proper error handling
+    let total_collateral_base = parse_u256_from_result(&result, 0, "total_collateral_base")?;
+    let total_debt_base = parse_u256_from_result(&result, 1, "total_debt_base")?;
+    let available_borrows_base = parse_u256_from_result(&result, 2, "available_borrows_base")?;
+    let current_liquidation_threshold =
+        parse_u256_from_result(&result, 3, "current_liquidation_threshold")?;
+    let ltv = parse_u256_from_result(&result, 4, "ltv")?;
+    let health_factor = parse_u256_from_result(&result, 5, "health_factor")?;
 
     let is_at_risk = health_factor < U256::from(1200000000000000000u64); // 1.2 in 18 decimals
 
