@@ -8,6 +8,7 @@ use alloy_provider::Provider;
 use chrono::Utc;
 use dashmap::DashMap;
 use eyre::Result;
+use scopeguard::defer;
 use sqlx::{Pool, Sqlite};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -111,29 +112,35 @@ pub async fn update_user_position<P>(
 where
     P: Provider,
 {
-    // Check if already processing this user
+    // Atomically check if already processing and add to set if not
     {
-        let processing = processing_users.read().await;
+        let mut processing = processing_users.write().await;
         if processing.contains(&user) {
             debug!("User {:?} already being processed, skipping", user);
             return Ok(());
         }
-    }
-
-    // Add to processing set
-    {
-        let mut processing = processing_users.write().await;
         processing.insert(user);
     }
 
-    // Use manual cleanup with proper error handling to avoid race conditions
-    let result = check_user_health(provider, pool_contract, user).await;
+    // Use scopeguard to ensure cleanup always happens, even if task panics or is cancelled
+    let processing_users_cleanup = processing_users.clone();
+    defer! {
+        // This cleanup runs synchronously when the guard is dropped
+        // Use blocking version to avoid spawning async tasks
+        if let Ok(mut processing) = processing_users_cleanup.try_write() {
+            processing.remove(&user);
+        } else {
+            // If we can't get the write lock immediately, spawn a task to ensure cleanup
+            // This should be rare but provides a fallback
+            let processing_users_fallback = processing_users_cleanup.clone();
+            tokio::spawn(async move {
+                let mut processing = processing_users_fallback.write().await;
+                processing.remove(&user);
+            });
+        }
+    }
 
-    // Ensure cleanup always happens, regardless of success or failure
-    let cleanup_result = {
-        let mut processing = processing_users.write().await;
-        processing.remove(&user)
-    };
+    let result = check_user_health(provider, pool_contract, user).await;
 
     match result {
         Ok(position) => {
