@@ -172,8 +172,7 @@ This could return a list of users and their health. We could filter or sort by h
 ### Aave Utilities SDK
  Aave provides a utility library (@aave/math-utils in JavaScript, and a GitHub aave-utilities repository) that can calculate health factor and other user data off-chain ￼. This might not have a Rust equivalent, but one can port the formula or simply use the on-chain call as we did. The formula for HF is repeated here for clarity:
 
-\[ \text{HealthFactor} = \frac{\sum_{\text{collateral}} ( \text{collateral amount} \times \text{price} \times \text{ltv\_of\asset})}{\sum{\text{borrowed}} (\text{debt amount} \times \text{price})} \]
-![HealthFactor Formula](docs/healthfactor-formula.png)
+![HealthFactor Formula](healthfactor_formula.png)
 
 If this falls below 1, liquidation is allowed ￼. Our bot doesn’t need to manually compute this often if we trust getUserAccountData, but understanding it is useful for sanity checks and simulations.
 
@@ -196,7 +195,7 @@ Aave Flash Loans: Aave v3’s Pool contract includes a flashLoan() function that
 
 Flash Loan Example Flow: See diagram below — the bot triggers a flash loan and liquidation in one atomic transaction. 
 
-![Flash Loan Example Flow](docs/flash-loan-example-flow.png)
+![Flash Loan Example Flow](flash-loan-example-flow.png)
 
 
 The Liquidation Bot (Rust) sends a transaction to its Liquidator Contract (Solidity), which requests a flash loan from Aave, gets the funds, then calls liquidationCall. Aave’s pool transfers the collateral to the Liquidator contract, which then swaps it via a DEX on Base (like Uniswap) to get back the borrowed asset. Finally, the borrowed asset (plus fee) is returned to Aave, and any remainder stays in the contract (and can be swept to the bot’s wallet as profit). This entire sequence happens within one block, ensuring atomicity – if anything fails (e.g., not enough collateral swapped to repay loan), the transaction reverts entirely.
@@ -525,7 +524,7 @@ These modules can be organized in the codebase as separate Rust modules or simpl
 
 The earlier sequence diagram (embedded above) covers the on-chain part. 
 
-![Flash Loan Example Flow](docs/flash-loan-example-flow.png)
+![Flash Loan Example Flow](flash-loan-example-flow.png)
 
 For off-chain architecture:
 
