@@ -126,17 +126,16 @@ where
         processing.insert(user);
     }
 
-    // Ensure we remove from processing set when done
-    let _guard = scopeguard::guard((), |_| {
-        let processing_users = processing_users.clone();
-        let user = user;
-        tokio::spawn(async move {
-            let mut processing = processing_users.write().await;
-            processing.remove(&user);
-        });
-    });
+    // Use manual cleanup with proper error handling to avoid race conditions
+    let result = check_user_health(provider, pool_contract, user).await;
 
-    match check_user_health(provider, pool_contract, user).await {
+    // Ensure cleanup always happens, regardless of success or failure
+    let cleanup_result = {
+        let mut processing = processing_users.write().await;
+        processing.remove(&user)
+    };
+
+    match result {
         Ok(position) => {
             let old_position = user_positions.get(&user).map(|p| p.clone());
 
