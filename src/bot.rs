@@ -100,6 +100,10 @@ where
         while let Some(event) = event_rx.recv().await {
             match event {
                 BotEvent::UserPositionChanged(user) => {
+                    debug!(
+                        "🔍 Processing UserPositionChanged event for user: {:?}",
+                        user
+                    );
                     if let Err(e) = scanner::update_user_position(
                         self.provider.clone(),
                         &self.pool_contract,
@@ -109,10 +113,13 @@ where
                         self.event_tx.clone(),
                         self.config.health_factor_threshold,
                         user,
+                        Some(self.users_by_collateral.clone()),
                     )
                     .await
                     {
                         error!("Failed to update user position for {:?}: {}", user, e);
+                    } else {
+                        debug!("✅ Completed health check for user: {:?}", user);
                     }
                 }
                 BotEvent::LiquidationOpportunity(user) => {
@@ -180,7 +187,50 @@ where
 
                 // Trigger health factor recalculation for all affected users
                 for user in users.iter() {
+                    info!("🔍 Triggering health check for user: {:?}", user);
                     let _ = self.event_tx.send(BotEvent::UserPositionChanged(*user));
+                }
+            } else {
+                info!(
+                    "⚠️ No users mapped to {} collateral yet, triggering broader health check",
+                    feed.asset_symbol
+                );
+
+                // Fallback: If we don't have users mapped to this collateral yet,
+                // trigger a check of all currently tracked users
+                let tracked_user_count = self.user_positions.len();
+                if tracked_user_count > 0 {
+                    info!("🔍 Checking {} currently tracked users", tracked_user_count);
+                    for entry in self.user_positions.iter() {
+                        let user = *entry.key();
+                        info!("🔍 Triggering health check for tracked user: {:?}", user);
+                        let _ = self.event_tx.send(BotEvent::UserPositionChanged(user));
+                    }
+                } else {
+                    info!("ℹ️ No users currently tracked in memory");
+                }
+
+                // Also trigger a database scan for at-risk users
+                match crate::database::get_at_risk_users(&self.db_pool).await {
+                    Ok(at_risk_users) => {
+                        info!(
+                            "Checking {} at-risk users from database due to price change",
+                            at_risk_users.len()
+                        );
+                        for user in at_risk_users {
+                            info!(
+                                "🔍 Triggering health check for at-risk user from DB: {:?}",
+                                user
+                            );
+                            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user));
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to get at-risk users during price change handling: {}",
+                            e
+                        );
+                    }
                 }
             }
         }

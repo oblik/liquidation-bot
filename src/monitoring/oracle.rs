@@ -31,7 +31,7 @@ pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
             chainlink_feed: "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1"
                 .parse()
                 .unwrap(), // ETH/USD on Base Sepolia ✅
-            price_change_threshold: 0.02, // 2% price change threshold
+            price_change_threshold: 0.005, // 0.5% price change threshold (reduced from 2%)
         },
     );
 
@@ -238,6 +238,11 @@ where
                                 let _ = event_tx
                                     .send(BotEvent::OraclePriceChanged(*asset_address, new_price));
                             } else {
+                                // Even if the price change isn't "significant", update the stored price
+                                // and trigger a lighter check for any existing at-risk users
+                                feed.last_price = new_price;
+                                feed.last_updated = Utc::now();
+
                                 info!(
                                     "📊 {} price stable: {} (change: {}bp, need: {}bp)",
                                     asset_config.symbol,
@@ -245,6 +250,17 @@ where
                                     price_change.as_limbs()[0],
                                     threshold_bp.as_limbs()[0]
                                 );
+
+                                // Trigger a lighter oracle price change event even for smaller movements
+                                // This ensures that at-risk users are still recalculated periodically
+                                if old_price > U256::ZERO && price_change > U256::from(10) {
+                                    // At least 10bp = 0.1% change
+                                    info!("🔄 Triggering light health check due to minor price movement");
+                                    let _ = event_tx.send(BotEvent::OraclePriceChanged(
+                                        *asset_address,
+                                        new_price,
+                                    ));
+                                }
                             }
                         } else {
                             warn!("⚠️ No price feed entry found for {}", asset_config.symbol);

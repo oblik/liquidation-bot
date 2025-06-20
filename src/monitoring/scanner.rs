@@ -14,6 +14,15 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info};
 
+/// Helper function to format health factor in human-readable format
+fn format_health_factor(hf: U256) -> String {
+    // Health factors are in 18 decimals (wei-like format)
+    // Convert to human readable by dividing by 10^18
+    let hf_str = hf.to_string();
+    let hf_f64: f64 = hf_str.parse::<f64>().unwrap_or(0.0) / 1e18;
+    format!("{} ({:.3})", hf, hf_f64)
+}
+
 pub async fn check_user_health<P>(
     _provider: Arc<P>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
@@ -51,7 +60,14 @@ where
         is_at_risk,
     };
 
-    debug!("User position: {:?}", position);
+    info!(
+        "📊 User {:?} health check: HF={}, Collateral={}, Debt={}, At-risk={}",
+        user,
+        format_health_factor(health_factor),
+        total_collateral_base,
+        total_debt_base,
+        is_at_risk
+    );
     Ok(position)
 }
 
@@ -64,6 +80,7 @@ pub async fn update_user_position<P>(
     event_tx: mpsc::UnboundedSender<BotEvent>,
     health_factor_threshold: U256,
     user: Address,
+    users_by_collateral: Option<Arc<DashMap<Address, HashSet<Address>>>>,
 ) -> Result<()>
 where
     P: Provider,
@@ -105,6 +122,23 @@ where
                 error!("Failed to save user position: {}", e);
             }
 
+            // TODO: Populate users_by_collateral mapping by calling getUserConfiguration
+            // and getReservesList to determine which assets this user has as collateral
+            // For now, we'll add this user to WETH collateral as a fallback since that's what we monitor
+            if let Some(users_by_collateral) = &users_by_collateral {
+                if position.total_collateral_base > U256::ZERO {
+                    // Base Sepolia WETH address - in production, you'd call getUserConfiguration
+                    let weth_address: Address = "0x4200000000000000000000000000000000000006"
+                        .parse()
+                        .unwrap();
+                    users_by_collateral
+                        .entry(weth_address)
+                        .or_insert_with(HashSet::new)
+                        .insert(user);
+                    debug!("Added user {:?} to WETH collateral tracking", user);
+                }
+            }
+
             // Check for liquidation opportunity
             if position.health_factor < U256::from(10u128.pow(18))
                 && position.total_debt_base > U256::ZERO
@@ -118,7 +152,8 @@ where
                     if !old_pos.is_at_risk {
                         info!(
                             "⚠️  NEW AT-RISK USER: {:?} (HF: {})",
-                            user, position.health_factor
+                            user,
+                            format_health_factor(position.health_factor)
                         );
                         if let Err(e) = database::log_monitoring_event(
                             db_pool,
@@ -126,18 +161,71 @@ where
                             Some(user),
                             Some(&format!(
                                 "Health factor dropped to {}",
-                                position.health_factor
+                                format_health_factor(position.health_factor)
                             )),
                         )
                         .await
                         {
                             error!("Failed to log at-risk event: {}", e);
                         }
+                    } else {
+                        // User was already at-risk, check if health factor changed significantly
+                        let hf_diff = if position.health_factor > old_pos.health_factor {
+                            position.health_factor - old_pos.health_factor
+                        } else {
+                            old_pos.health_factor - position.health_factor
+                        };
+
+                        // Log if health factor changed by more than 1% (0.01 * 1e18)
+                        let change_threshold = U256::from(10000000000000000u64); // 0.01 * 1e18
+
+                        if hf_diff > change_threshold {
+                            let direction = if position.health_factor > old_pos.health_factor {
+                                "↗️ IMPROVED"
+                            } else {
+                                "↘️ WORSENED"
+                            };
+
+                            info!(
+                                "⚠️  AT-RISK USER {} HEALTH FACTOR: {:?} (HF: {} → {})",
+                                direction,
+                                user,
+                                format_health_factor(old_pos.health_factor),
+                                format_health_factor(position.health_factor)
+                            );
+                        } else {
+                            // Log ongoing at-risk status if health factor is dangerously low (< 1.1)
+                            let danger_threshold = U256::from(1100000000000000000u64); // 1.1 * 1e18
+                            if position.health_factor < danger_threshold {
+                                info!(
+                                    "🚨 CRITICALLY AT-RISK USER (ongoing): {:?} (HF: {} - NEAR LIQUIDATION!)",
+                                    user, format_health_factor(position.health_factor)
+                                );
+                            } else {
+                                // Just debug log for normal at-risk users with stable HF
+                                debug!(
+                                    "⚠️  AT-RISK USER (stable): {:?} (HF: {})",
+                                    user,
+                                    format_health_factor(position.health_factor)
+                                );
+                            }
+                        }
                     }
                 } else {
                     info!(
                         "⚠️  AT-RISK USER: {:?} (HF: {})",
-                        user, position.health_factor
+                        user,
+                        format_health_factor(position.health_factor)
+                    );
+                }
+            } else if let Some(old_pos) = &old_position {
+                // Check if user recovered from at-risk status
+                if old_pos.is_at_risk && !position.is_at_risk {
+                    info!(
+                        "✅ USER RECOVERED: {:?} (HF: {} → {}) - No longer at risk!",
+                        user,
+                        format_health_factor(old_pos.health_factor),
+                        format_health_factor(position.health_factor)
                     );
                 }
             }
