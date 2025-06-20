@@ -16,9 +16,9 @@ This document outlines the development status and next steps for the Aave v3 liq
 - [x] **Database Persistence**: Integrated `sqlx` with SQLite (and PostgreSQL support) to store user positions, bot events, and liquidation history.
 - [x] **Concurrent Architecture**: Re-architected into a multi-task `tokio` application for high-performance, non-blocking monitoring.
 - [x] **Graceful Fallback**: The bot intelligently detects if a WebSocket connection is available and falls back to HTTP polling if not.
+- [x] **Oracle Price Monitoring**: Integrate with Chainlink price feeds to monitor for price changes that affect health factors, providing a second trigger for liquidations beyond direct user actions.
 
 ### Next Steps
-- [ ] **Oracle Price Monitoring**: Integrate with Chainlink price feeds to monitor for price changes that affect health factors, providing a second trigger for liquidations beyond direct user actions.
 - [ ] **Profitability Calculation**: Implement logic to accurately estimate the profitability of a liquidation opportunity, considering the liquidation bonus, flash loan fees, DEX swap slippage, and gas costs.
 - [ ] **Liquidation Execution**: Implement the final logic to call the `AaveLiquidator` smart contract, sending a transaction to execute a liquidation when a profitable opportunity is found.
 
@@ -34,4 +34,4 @@ This document outlines the development status and next steps for the Aave v3 liq
 
 ## Conclusion
 
-The core monitoring engine is now complete and functional. The next critical steps involve integrating price oracle data and building the profitability models to allow the bot to make informed, autonomous liquidation decisions.
+The core monitoring engine as well as the core price orace data fetching are now complete and functional. The next critical steps involve expanding price oracle data and building the profitability models to allow the bot to make informed, autonomous liquidation decisions.
