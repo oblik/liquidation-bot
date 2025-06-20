@@ -21,8 +21,8 @@ pub struct LiquidationBot<P> {
     provider: Arc<P>,
     ws_provider: Arc<dyn Provider>,
     pub config: BotConfig,
-    pool_contract: ContractInstance<Arc<P>>,
-    liquidator_contract: Option<ContractInstance<Arc<P>>>,
+    pool_contract: ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
+    _liquidator_contract: Option<ContractInstance<alloy_transport::BoxTransport, Arc<P>>>,
     db_pool: Pool<Sqlite>,
     user_positions: Arc<DashMap<Address, UserPosition>>,
     processing_users: Arc<RwLock<HashSet<Address>>>,
@@ -66,7 +66,7 @@ where
         let db_pool = database::init_database(&config.database_url).await?;
 
         // For now, liquidator contract is optional
-        let liquidator_contract = None;
+        let _liquidator_contract = None;
 
         // Create event channels for internal communication
         let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -79,7 +79,7 @@ where
             ws_provider,
             config,
             pool_contract,
-            liquidator_contract,
+            _liquidator_contract,
             db_pool,
             user_positions: Arc::new(DashMap::new()),
             processing_users: Arc::new(RwLock::new(HashSet::new())),
@@ -123,17 +123,21 @@ where
                     )
                     .await
                     {
-                        error!("Failed to handle liquidation opportunity for {:?}: {}", user, e);
+                        error!(
+                            "Failed to handle liquidation opportunity for {:?}: {}",
+                            user, e
+                        );
                     }
                 }
-                BotEvent::PriceUpdate(asset, old_price, new_price) => {
+                BotEvent::PriceUpdate(asset, _old_price, _new_price) => {
                     debug!("Price update detected for asset: {:?}", asset);
                     // Could trigger a broader scan of users holding this asset
                 }
                 BotEvent::DatabaseSync(positions) => {
                     debug!("Database sync requested for {} positions", positions.len());
                     for position in positions {
-                        if let Err(e) = database::save_user_position(&self.db_pool, &position).await {
+                        if let Err(e) = database::save_user_position(&self.db_pool, &position).await
+                        {
                             error!("Failed to sync position for {:?}: {}", position.address, e);
                         }
                     }
@@ -150,7 +154,11 @@ where
         Ok(())
     }
 
-    async fn handle_oracle_price_change(&self, asset_address: Address, new_price: U256) -> Result<()> {
+    async fn handle_oracle_price_change(
+        &self,
+        asset_address: Address,
+        new_price: U256,
+    ) -> Result<()> {
         // Update the price feed
         if let Some(mut feed) = self.price_feeds.get_mut(&asset_address) {
             let old_price = feed.last_price;
@@ -205,10 +213,7 @@ where
                 self.event_tx.clone(),
                 self.config.clone(),
             ),
-            scanner::start_status_reporter(
-                self.db_pool.clone(),
-                self.user_positions.clone(),
-            ),
+            scanner::start_status_reporter(self.db_pool.clone(), self.user_positions.clone(),),
         )?;
 
         Ok(())

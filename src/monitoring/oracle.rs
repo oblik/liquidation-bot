@@ -1,3 +1,5 @@
+use crate::events::BotEvent;
+use crate::models::{AssetConfig, PriceFeed};
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types::Filter;
@@ -9,39 +11,49 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
-use crate::events::BotEvent;
-use crate::models::{AssetConfig, PriceFeed};
 
 pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
     let mut configs = HashMap::new();
-    
+
     // Base Sepolia testnet asset configurations
     // Only including verified working oracle feeds
-    
+
     // WETH - CONFIRMED WORKING ✅
     configs.insert(
-        "0x4200000000000000000000000000000000000006".parse().unwrap(),
+        "0x4200000000000000000000000000000000000006"
+            .parse()
+            .unwrap(),
         AssetConfig {
-            address: "0x4200000000000000000000000000000000000006".parse().unwrap(),
+            address: "0x4200000000000000000000000000000000000006"
+                .parse()
+                .unwrap(),
             symbol: "WETH".to_string(),
-            chainlink_feed: "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1".parse().unwrap(), // ETH/USD on Base Sepolia ✅
+            chainlink_feed: "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1"
+                .parse()
+                .unwrap(), // ETH/USD on Base Sepolia ✅
             price_change_threshold: 0.02, // 2% price change threshold
         },
     );
-    
+
     // Note: USDC/USDT oracle feeds are not available or working on Base Sepolia testnet
     // In production on Base mainnet, you would add:
-    // - USDC: Different oracle address  
+    // - USDC: Different oracle address
     // - USDT: Different oracle address
     // - DAI: Different oracle address
     // For now, focusing on working WETH oracle for demonstration
-    
-    info!("Initialized {} asset configuration(s) for oracle monitoring", configs.len());
+
+    info!(
+        "Initialized {} asset configuration(s) for oracle monitoring",
+        configs.len()
+    );
     info!("🎯 Active oracle feeds:");
     for config in configs.values() {
-        info!("   {} ({}): {}", config.symbol, config.address, config.chainlink_feed);
+        info!(
+            "   {} ({}): {}",
+            config.symbol, config.address, config.chainlink_feed
+        );
     }
-    
+
     configs
 }
 
@@ -64,7 +76,10 @@ where
     info!("🔧 Oracle monitoring mode decision:");
     info!("   WebSocket URL: {}", ws_url);
     info!("   Starts with wss://: {}", ws_url.starts_with("wss://"));
-    info!("   Contains sepolia.base.org: {}", ws_url.contains("sepolia.base.org"));
+    info!(
+        "   Contains sepolia.base.org: {}",
+        ws_url.contains("sepolia.base.org")
+    );
     info!("   Using WebSocket mode: {}", using_websocket);
 
     if !using_websocket {
@@ -78,7 +93,13 @@ where
 
     // Also start periodic polling as backup to show activity
     info!("🔄 Starting backup polling to show oracle activity...");
-    let _ = start_periodic_price_polling(provider.clone(), event_tx.clone(), asset_configs.clone(), price_feeds.clone()).await;
+    let _ = start_periodic_price_polling(
+        provider.clone(),
+        event_tx.clone(),
+        asset_configs.clone(),
+        price_feeds.clone(),
+    )
+    .await;
 
     // Subscribe to AnswerUpdated events from each price feed
     for (asset_address, asset_config) in &asset_configs {
@@ -119,7 +140,8 @@ where
             info!("👂 Listening for {} price updates...", symbol);
 
             while let Some(log) = stream.next().await {
-                if let Err(e) = handle_price_update_event(log, &event_tx, asset_addr, &symbol).await {
+                if let Err(e) = handle_price_update_event(log, &event_tx, asset_addr, &symbol).await
+                {
                     error!("Error handling price update for {}: {}", symbol, e);
                 }
             }
@@ -140,7 +162,10 @@ where
     P: Provider + 'static,
 {
     info!("🔄 Starting periodic price polling (every 30 seconds)...");
-    info!("🎯 Monitoring {} assets for price changes", asset_configs.len());
+    info!(
+        "🎯 Monitoring {} assets for price changes",
+        asset_configs.len()
+    );
 
     for (_, config) in &asset_configs {
         info!(
@@ -156,12 +181,24 @@ where
 
         loop {
             interval.tick().await;
-            info!("🔍 Polling oracle prices for {} assets...", asset_configs.len());
+            info!(
+                "🔍 Polling oracle prices for {} assets...",
+                asset_configs.len()
+            );
 
             for (asset_address, asset_config) in &asset_configs {
-                info!("📞 Calling {} oracle at {}", asset_config.symbol, asset_config.chainlink_feed);
+                info!(
+                    "📞 Calling {} oracle at {}",
+                    asset_config.symbol, asset_config.chainlink_feed
+                );
 
-                match fetch_price_from_oracle(&provider, asset_config.chainlink_feed, &asset_config.symbol).await {
+                match fetch_price_from_oracle(
+                    &provider,
+                    asset_config.chainlink_feed,
+                    &asset_config.symbol,
+                )
+                .await
+                {
                     Ok(new_price) => {
                         info!("✅ {} price fetched: {}", asset_config.symbol, new_price);
 
@@ -180,7 +217,8 @@ where
                                 U256::MAX // First price update
                             };
 
-                            let threshold_bp = U256::from((asset_config.price_change_threshold * 10000.0) as u64);
+                            let threshold_bp =
+                                U256::from((asset_config.price_change_threshold * 10000.0) as u64);
 
                             if price_change > threshold_bp || old_price == U256::ZERO {
                                 feed.last_price = new_price;
@@ -197,7 +235,8 @@ where
                                     asset_config.symbol, old_price, new_price, change_pct
                                 );
 
-                                let _ = event_tx.send(BotEvent::OraclePriceChanged(*asset_address, new_price));
+                                let _ = event_tx
+                                    .send(BotEvent::OraclePriceChanged(*asset_address, new_price));
                             } else {
                                 info!(
                                     "📊 {} price stable: {} (change: {}bp, need: {}bp)",
@@ -244,7 +283,7 @@ where
         ..Default::default()
     };
 
-    match provider.call(call_request).await {
+    match provider.call(&call_request).await {
         Ok(result) => {
             if result.len() >= 32 {
                 let price = U256::from_be_slice(&result[..32]);
@@ -262,7 +301,7 @@ where
 }
 
 pub async fn handle_price_update_event(
-    log: alloy_rpc_types::Log,
+    _log: alloy_rpc_types::Log,
     event_tx: &mpsc::UnboundedSender<BotEvent>,
     asset_address: Address,
     symbol: &str,
@@ -270,11 +309,17 @@ pub async fn handle_price_update_event(
     // For now, we'll use a simplified approach since LogData access is complex
     // In a production environment, you would properly decode the AnswerUpdated event
     // For demonstration, we'll just trigger a price change event
-    info!("📊 Oracle event detected for {}, triggering price check", symbol);
+    info!(
+        "📊 Oracle event detected for {}, triggering price check",
+        symbol
+    );
 
     // Send a dummy price change event - in production this would be the actual decoded price
     let placeholder_price = U256::from(1000_00000000u64); // $1000 * 1e8 (Chainlink format)
-    let _ = event_tx.send(BotEvent::OraclePriceChanged(asset_address, placeholder_price));
+    let _ = event_tx.send(BotEvent::OraclePriceChanged(
+        asset_address,
+        placeholder_price,
+    ));
 
     Ok(())
 }

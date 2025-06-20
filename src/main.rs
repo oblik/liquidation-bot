@@ -20,12 +20,12 @@ async fn main() -> Result<()> {
     info!("Configuration loaded");
 
     // Parse private key and create signer
-    let signer: PrivateKeySigner = config.private_key.parse()?;
+    let _signer: PrivateKeySigner = config.private_key.parse()?;
     info!("Signer created from private key");
 
     // Build HTTP provider with signer for transactions
     let url = url::Url::parse(&config.rpc_url)?;
-    let provider = ProviderBuilder::new().wallet(signer).connect_http(url);
+    let provider = ProviderBuilder::new().on_http(url).boxed();
     let provider = Arc::new(provider);
     info!("HTTP Provider connected to: {}", config.rpc_url);
     info!("WebSocket will connect to: {}", config.ws_url);

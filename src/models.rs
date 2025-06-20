@@ -1,8 +1,8 @@
+use alloy_json_abi::JsonAbi;
 use alloy_primitives::{Address, U256};
+use alloy_sol_types::sol;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use alloy_json_abi::JsonAbi;
-use alloy_sol_types::{sol, SolEvent};
 
 // Define Aave events using sol! macro for type safety
 sol! {

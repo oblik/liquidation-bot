@@ -1,3 +1,7 @@
+use crate::config::BotConfig;
+use crate::database;
+use crate::events::BotEvent;
+use crate::models::UserPosition;
 use alloy_contract::ContractInstance;
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
@@ -8,15 +12,11 @@ use sqlx::{Pool, Sqlite};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, info, warn};
-use crate::config::BotConfig;
-use crate::database;
-use crate::events::BotEvent;
-use crate::models::UserPosition;
+use tracing::{debug, error, info};
 
 pub async fn check_user_health<P>(
-    provider: Arc<P>,
-    pool_contract: &ContractInstance<Arc<P>>,
+    _provider: Arc<P>,
+    pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     user: Address,
 ) -> Result<UserPosition>
 where
@@ -57,7 +57,7 @@ where
 
 pub async fn update_user_position<P>(
     provider: Arc<P>,
-    pool_contract: &ContractInstance<Arc<P>>,
+    pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     db_pool: &Pool<Sqlite>,
     user_positions: Arc<DashMap<Address, UserPosition>>,
     processing_users: Arc<RwLock<HashSet<Address>>>,
@@ -106,7 +106,9 @@ where
             }
 
             // Check for liquidation opportunity
-            if position.health_factor < U256::from(10u128.pow(18)) && position.total_debt_base > U256::ZERO {
+            if position.health_factor < U256::from(10u128.pow(18))
+                && position.total_debt_base > U256::ZERO
+            {
                 let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
             }
 
@@ -114,18 +116,29 @@ where
             if position.is_at_risk && position.health_factor < health_factor_threshold {
                 if let Some(old_pos) = old_position {
                     if !old_pos.is_at_risk {
-                        info!("⚠️  NEW AT-RISK USER: {:?} (HF: {})", user, position.health_factor);
+                        info!(
+                            "⚠️  NEW AT-RISK USER: {:?} (HF: {})",
+                            user, position.health_factor
+                        );
                         if let Err(e) = database::log_monitoring_event(
                             db_pool,
                             "user_at_risk",
                             Some(user),
-                            Some(&format!("Health factor dropped to {}", position.health_factor)),
-                        ).await {
+                            Some(&format!(
+                                "Health factor dropped to {}",
+                                position.health_factor
+                            )),
+                        )
+                        .await
+                        {
                             error!("Failed to log at-risk event: {}", e);
                         }
                     }
                 } else {
-                    info!("⚠️  AT-RISK USER: {:?} (HF: {})", user, position.health_factor);
+                    info!(
+                        "⚠️  AT-RISK USER: {:?} (HF: {})",
+                        user, position.health_factor
+                    );
                 }
             }
         }

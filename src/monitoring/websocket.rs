@@ -1,3 +1,4 @@
+use crate::events::BotEvent;
 use alloy_primitives::Address;
 use alloy_provider::{Provider, ProviderBuilder, WsConnect};
 use alloy_rpc_types::{Filter, Log};
@@ -6,16 +7,15 @@ use futures::StreamExt;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
-use crate::events::BotEvent;
 
 pub async fn try_connect_websocket(ws_url: &str) -> Result<Arc<dyn Provider>> {
     let ws_connect = WsConnect::new(ws_url.to_string());
-    let ws_provider = ProviderBuilder::new().connect_ws(ws_connect).await?;
-    Ok(Arc::new(ws_provider))
+    let ws_provider = ProviderBuilder::new().on_ws(ws_connect).await?;
+    Ok(Arc::new(ws_provider.boxed()))
 }
 
 pub async fn start_event_monitoring<P>(
-    provider: Arc<P>,
+    _provider: Arc<P>,
     ws_provider: Arc<dyn Provider>,
     ws_url: &str,
     event_tx: mpsc::UnboundedSender<BotEvent>,
