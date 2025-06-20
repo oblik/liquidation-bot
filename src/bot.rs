@@ -15,7 +15,7 @@ use crate::database::{init_database, log_monitoring_event, save_user_position};
 use crate::events::BotEvent;
 use crate::liquidation::LiquidationOpportunityHandler;
 use crate::models::{HardhatArtifact, UserPosition};
-use crate::monitoring::{PeriodicScanner, WebSocketMonitor};
+use crate::monitoring::{PeriodicScanner, WebSocketMonitor, OraclePriceMonitor, OracleConfig};
 
 // Main bot struct with event monitoring capabilities
 pub struct LiquidationBot<P> {
@@ -30,6 +30,7 @@ pub struct LiquidationBot<P> {
     event_tx: mpsc::UnboundedSender<BotEvent>,
     event_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<BotEvent>>>,
     liquidation_handler: LiquidationOpportunityHandler,
+    oracle_monitor: Option<OraclePriceMonitor<P>>,
 }
 
 impl<P> LiquidationBot<P>
@@ -78,6 +79,22 @@ where
             user_positions.clone(),
         );
 
+        // Initialize oracle price monitor if enabled
+        let oracle_monitor = if config.oracle_monitoring_enabled {
+            let oracle_config = OracleConfig {
+                monitoring_enabled: true,
+                price_change_threshold: config.price_change_threshold,
+                ..Default::default()
+            };
+            Some(OraclePriceMonitor::new(
+                provider.clone(),
+                oracle_config,
+                event_tx.clone(),
+            ))
+        } else {
+            None
+        };
+
         Ok(Self {
             provider,
             ws_provider,
@@ -90,6 +107,7 @@ where
             event_tx,
             event_rx: Arc::new(tokio::sync::Mutex::new(event_rx)),
             liquidation_handler,
+            oracle_monitor,
         })
     }
 
@@ -216,8 +234,33 @@ where
                     }
                 }
                 BotEvent::PriceUpdate(asset) => {
-                    debug!("Price update detected for asset: {:?}", asset);
-                    // Could trigger a broader scan of users holding this asset
+                    info!("💰 Significant price update detected for asset: {:?}", asset);
+                    
+                    // Log the price update event
+                    if let Err(e) = log_monitoring_event(
+                        &self.db_pool,
+                        "price_update",
+                        None,
+                        Some(&format!("Asset: {:?}", asset)),
+                    ).await {
+                        error!("Failed to log price update event: {}", e);
+                    }
+                    
+                    // Trigger a scan of users with this asset as collateral
+                    // For now, we'll trigger a broader scan of at-risk users
+                    // In the future, this could be optimized to only scan users with specific collateral
+                    let at_risk_users = match crate::database::get_at_risk_users(&self.db_pool).await {
+                        Ok(users) => users,
+                        Err(e) => {
+                            error!("Failed to get at-risk users after price update: {}", e);
+                            continue;
+                        }
+                    };
+                    
+                    info!("Triggering position refresh for {} at-risk users due to price change", at_risk_users.len());
+                    for user in at_risk_users {
+                        let _ = self.event_tx.send(BotEvent::UserPositionChanged(user));
+                    }
                 }
                 BotEvent::DatabaseSync(positions) => {
                     debug!("Database sync requested for {} positions", positions.len());
@@ -278,10 +321,12 @@ where
         let using_websocket = self.config.ws_url.starts_with("wss://")
             && !self.config.ws_url.contains("sepolia.base.org");
 
+        let oracle_status = if self.oracle_monitor.is_some() { "Oracle Price Monitoring Enabled" } else { "Oracle Price Monitoring Disabled" };
+        
         if using_websocket {
-            info!("🚀 Starting Aave v3 Liquidation Bot with Real-Time WebSocket Monitoring");
+            info!("🚀 Starting Aave v3 Liquidation Bot with Real-Time WebSocket Monitoring + {}", oracle_status);
         } else {
-            info!("🚀 Starting Aave v3 Liquidation Bot with Polling-Based Monitoring");
+            info!("🚀 Starting Aave v3 Liquidation Bot with Polling-Based Monitoring + {}", oracle_status);
         }
 
         // Initialize monitoring components
@@ -311,6 +356,16 @@ where
                 }
             }
         };
+
+        // Start oracle price monitoring if enabled
+        if let Some(oracle_monitor) = &self.oracle_monitor {
+            let oracle_monitor_clone = oracle_monitor.clone();
+            tokio::spawn(async move {
+                if let Err(e) = oracle_monitor_clone.start_monitoring().await {
+                    error!("Oracle price monitoring failed: {}", e);
+                }
+            });
+        }
 
         // Test basic functionality first
         if let Some(target_user) = self.config.target_user {

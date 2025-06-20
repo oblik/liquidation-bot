@@ -13,6 +13,8 @@ pub struct BotConfig {
     pub database_url: String,
     pub health_factor_threshold: U256, // Alert if HF below this (e.g., 1.1)
     pub monitoring_interval_secs: u64,
+    pub oracle_monitoring_enabled: bool,
+    pub price_change_threshold: u64, // basis points for significant price changes
 }
 
 impl BotConfig {
@@ -63,6 +65,16 @@ impl BotConfig {
             .parse()
             .unwrap_or(5);
 
+        let oracle_monitoring_enabled = std::env::var("ORACLE_MONITORING_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse()
+            .unwrap_or(true);
+
+        let price_change_threshold = std::env::var("PRICE_CHANGE_THRESHOLD")
+            .unwrap_or_else(|_| "500".to_string()) // 5% default
+            .parse()
+            .unwrap_or(500);
+
         Ok(Self {
             rpc_url,
             ws_url,
@@ -74,6 +86,8 @@ impl BotConfig {
             database_url,
             health_factor_threshold,
             monitoring_interval_secs,
+            oracle_monitoring_enabled,
+            price_change_threshold,
         })
     }
 }

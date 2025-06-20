@@ -4,6 +4,7 @@ use eyre::Result;
 use sqlx::{Pool, Row, Sqlite};
 use tracing::info;
 use crate::models::UserPosition;
+use crate::monitoring::AssetPrice;
 
 pub async fn init_database(database_url: &str) -> Result<Pool<Sqlite>> {
     let pool = sqlx::SqlitePool::connect(database_url).await?;
@@ -56,6 +57,20 @@ pub async fn init_database(database_url: &str) -> Result<Pool<Sqlite>> {
             health_factor TEXT,
             timestamp DATETIME NOT NULL,
             details TEXT
+        )
+    "#,
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS asset_prices (
+            asset_address TEXT PRIMARY KEY,
+            price TEXT NOT NULL,
+            decimals INTEGER NOT NULL,
+            last_updated DATETIME NOT NULL,
+            source TEXT NOT NULL DEFAULT 'chainlink'
         )
     "#,
     )
@@ -129,4 +144,24 @@ pub async fn get_at_risk_users(db_pool: &Pool<Sqlite>) -> Result<Vec<Address>> {
     }
 
     Ok(users)
+}
+
+pub async fn save_asset_price(db_pool: &Pool<Sqlite>, asset_price: &AssetPrice) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT OR REPLACE INTO asset_prices (
+            asset_address, price, decimals, last_updated, source
+        ) VALUES (?, ?, ?, ?, ?)
+    "#,
+    )
+    .bind(asset_price.asset.to_string())
+    .bind(asset_price.price.to_string())
+    .bind(asset_price.decimals as i32)
+    .bind(chrono::DateTime::from_timestamp(asset_price.last_updated as i64, 0)
+        .unwrap_or_else(|| Utc::now()))
+    .bind("chainlink")
+    .execute(db_pool)
+    .await?;
+
+    Ok(())
 }

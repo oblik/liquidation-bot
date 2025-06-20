@@ -11,5 +11,6 @@ pub use bot::LiquidationBot;
 pub use config::BotConfig;
 pub use events::BotEvent;
 pub use models::{HardhatArtifact, UserPosition};
+pub use monitoring::{OracleConfig, AssetPrice};
 
 pub type Result<T> = eyre::Result<T>;
