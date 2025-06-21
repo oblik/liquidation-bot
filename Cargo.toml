@@ -56,3 +56,6 @@ parking_lot = "0.12"
 # Error handling
 eyre = "0.6"
 thiserror = "1.0"
+
+# Async trait support
+async-trait = "0.1"
