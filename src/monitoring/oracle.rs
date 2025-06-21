@@ -235,15 +235,24 @@ where
                                             // Calculate how many times larger diff is compared to old_price
                                             let multiple = diff / old_price;
                                             // Cap at a reasonable maximum (e.g., 1000% = 100,000 basis points)
-                                            (multiple * U256::from(10000)).min(U256::from(100000))
+                                            // Use checked arithmetic to prevent overflow
+                                            match multiple.checked_mul(U256::from(10000)) {
+                                                Some(result) => result.min(U256::from(100000)),
+                                                None => U256::from(100000), // Cap at maximum if overflow
+                                            }
                                         } else {
                                             // For changes less than 100%, use step-by-step calculation to avoid truncation
                                             // Calculate (diff * 100) / old_price first, then multiply by 100
                                             match diff.checked_mul(U256::from(100)) {
                                                 Some(diff_100) => {
                                                     let percentage_100 = diff_100 / old_price;
-                                                    percentage_100 * U256::from(100)
-                                                    // Convert to basis points
+                                                    // Use checked arithmetic to prevent overflow
+                                                    match percentage_100
+                                                        .checked_mul(U256::from(100))
+                                                    {
+                                                        Some(result) => result,
+                                                        None => U256::from(100000), // Cap at maximum if overflow
+                                                    }
                                                 }
                                                 None => {
                                                     // Even diff * 100 overflows, this is still a massive change
@@ -354,7 +363,10 @@ where
     let call_data = match alloy_primitives::hex::decode("50d25bcd") {
         Ok(data) => data,
         Err(e) => {
-            return Err(eyre::eyre!("Failed to decode latestAnswer() selector: {}", e));
+            return Err(eyre::eyre!(
+                "Failed to decode latestAnswer() selector: {}",
+                e
+            ));
         }
     }; // latestAnswer() selector
 
