@@ -1,14 +1,96 @@
+use alloy_contract::ContractInstance;
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use chrono::Utc;
 use eyre::Result;
 use sqlx::{Pool, Sqlite};
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{assets, executor, profitability};
 use crate::database;
 use crate::models::UserPosition;
+
+/// Fetch user's actual collateral and debt assets from the blockchain
+async fn get_user_assets<P>(
+    pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
+    user: Address,
+) -> Result<(Vec<Address>, Vec<Address>)>
+where
+    P: Provider,
+{
+    debug!("Fetching user configuration for: {:?}", user);
+
+    // Get user configuration bitfield
+    let user_config_args = [alloy_dyn_abi::DynSolValue::Address(user)];
+    let user_config_call = pool_contract.function("getUserConfiguration", &user_config_args)?;
+    let user_config_result = user_config_call.call().await?;
+
+    // Extract the configuration data from the tuple
+    let config_data = if let alloy_dyn_abi::DynSolValue::Tuple(tuple) = &user_config_result[0] {
+        if let alloy_dyn_abi::DynSolValue::Uint(data, _) = &tuple[0] {
+            *data
+        } else {
+            return Err(eyre::eyre!("Invalid user configuration data format"));
+        }
+    } else {
+        return Err(eyre::eyre!("Invalid user configuration result format"));
+    };
+
+    // Get reserves list
+    let reserves_call = pool_contract.function("getReservesList", &[])?;
+    let reserves_result = reserves_call.call().await?;
+
+    // Extract reserves array
+    let reserves: Vec<Address> =
+        if let alloy_dyn_abi::DynSolValue::Array(array) = &reserves_result[0] {
+            array
+                .iter()
+                .filter_map(|value| {
+                    if let alloy_dyn_abi::DynSolValue::Address(addr) = value {
+                        Some(*addr)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            return Err(eyre::eyre!("Invalid reserves list format"));
+        };
+
+    debug!("Found {} reserves in the pool", reserves.len());
+
+    // Decode user configuration bitfield
+    let mut user_collateral_assets = Vec::new();
+    let mut user_debt_assets = Vec::new();
+
+    // Each asset has 2 bits in the configuration:
+    // - Bit 2*i: whether the asset is used as collateral
+    // - Bit 2*i+1: whether the asset is borrowed
+    for (i, &reserve_address) in reserves.iter().enumerate() {
+        let collateral_bit = (config_data >> (2 * i)) & U256::from(1u8);
+        let borrowing_bit = (config_data >> (2 * i + 1)) & U256::from(1u8);
+
+        if collateral_bit != U256::ZERO {
+            user_collateral_assets.push(reserve_address);
+            debug!("User has {} as collateral", reserve_address);
+        }
+
+        if borrowing_bit != U256::ZERO {
+            user_debt_assets.push(reserve_address);
+            debug!("User has {} as debt", reserve_address);
+        }
+    }
+
+    info!(
+        "User {} has {} collateral assets and {} debt assets",
+        user,
+        user_collateral_assets.len(),
+        user_debt_assets.len()
+    );
+
+    Ok((user_collateral_assets, user_debt_assets))
+}
 
 /// Handle a detected liquidation opportunity with real profitability calculation and execution
 pub async fn handle_liquidation_opportunity<P>(
@@ -18,6 +100,7 @@ pub async fn handle_liquidation_opportunity<P>(
     min_profit_threshold: U256,
     liquidator_contract_address: Option<Address>,
     signer: Option<alloy_signer_local::PrivateKeySigner>,
+    pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
 ) -> Result<()>
 where
     P: Provider + 'static,
@@ -49,14 +132,27 @@ where
     // Initialize asset configurations
     let asset_configs = assets::init_base_sepolia_assets();
 
-    // For this example, we'll simulate the user's collateral and debt assets
-    // In a real implementation, you'd call getUserConfiguration to get actual assets
-    let user_collateral_assets = vec![
-        "0x4200000000000000000000000000000000000006".parse()?, // WETH
-    ];
-    let user_debt_assets = vec![
-        "0x036CbD53842c5426634e7929541eC2318f3dCF7e".parse()?, // USDC
-    ];
+    // Fetch user's actual collateral and debt assets from the blockchain
+    let (user_collateral_assets, user_debt_assets) =
+        match get_user_assets(pool_contract, user).await {
+            Ok(assets) => assets,
+            Err(e) => {
+                error!("Failed to fetch user assets from blockchain: {}", e);
+                // Fallback to empty vectors - this will cause the liquidation to be skipped
+                (Vec::new(), Vec::new())
+            }
+        };
+
+    // Validate that user has both collateral and debt
+    if user_collateral_assets.is_empty() {
+        warn!("User {} has no collateral assets - cannot liquidate", user);
+        return Ok(());
+    }
+
+    if user_debt_assets.is_empty() {
+        warn!("User {} has no debt assets - nothing to liquidate", user);
+        return Ok(());
+    }
 
     // Find the best liquidation pair
     let (collateral_asset_addr, debt_asset_addr) = match assets::find_best_liquidation_pair(

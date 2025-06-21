@@ -165,6 +165,7 @@ where
                         self.config.min_profit_threshold,
                         self.liquidator_contract_address,
                         Some(self.signer.clone()),
+                        &self.pool_contract,
                     )
                     .await
                     {
