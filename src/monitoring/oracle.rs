@@ -19,18 +19,36 @@ pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
     // Only including verified working oracle feeds
 
     // WETH - CONFIRMED WORKING ✅
+    let weth_address = match "0x4200000000000000000000000000000000000006".parse() {
+        Ok(addr) => addr,
+        Err(e) => {
+            error!("Failed to parse WETH address: {}", e);
+            return configs;
+        }
+    };
+    
+    let weth_asset_address = match "0x4200000000000000000000000000000000000006".parse() {
+        Ok(addr) => addr,
+        Err(e) => {
+            error!("Failed to parse WETH asset address: {}", e);
+            return configs;
+        }
+    };
+    
+    let chainlink_feed_address = match "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1".parse() {
+        Ok(addr) => addr,
+        Err(e) => {
+            error!("Failed to parse Chainlink feed address: {}", e);
+            return configs;
+        }
+    };
+
     configs.insert(
-        "0x4200000000000000000000000000000000000006"
-            .parse()
-            .unwrap(),
+        weth_address,
         AssetConfig {
-            address: "0x4200000000000000000000000000000000000006"
-                .parse()
-                .unwrap(),
+            address: weth_asset_address,
             symbol: "WETH".to_string(),
-            chainlink_feed: "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1"
-                .parse()
-                .unwrap(), // ETH/USD on Base Sepolia ✅
+            chainlink_feed: chainlink_feed_address, // ETH/USD on Base Sepolia ✅
             price_change_threshold: 0.005, // 0.5% price change threshold (reduced from 2%)
         },
     );
@@ -205,27 +223,55 @@ where
                         // Check if price changed significantly
                         if let Some(mut feed) = price_feeds.get_mut(asset_address) {
                             let old_price = feed.last_price;
-                            let price_change = if old_price > U256::ZERO {
+                            let price_change = if old_price > U256::ZERO && new_price > U256::ZERO {
                                 let diff = if new_price > old_price {
                                     new_price - old_price
                                 } else {
                                     old_price - new_price
                                 };
-                                // Calculate percentage change
-                                (diff * U256::from(10000)) / old_price // Basis points
+                                
+                                // Prevent overflow by checking if multiplication would overflow
+                                // Use checked arithmetic for safe calculation
+                                match diff.checked_mul(U256::from(10000)) {
+                                    Some(multiplied) => {
+                                        if old_price > U256::ZERO {
+                                            multiplied / old_price // Basis points
+                                        } else {
+                                            U256::ZERO
+                                        }
+                                    }
+                                    None => {
+                                        // Overflow detected, calculate manually with reduced precision
+                                        warn!("Price change calculation overflow for {}, using fallback calculation", asset_config.symbol);
+                                        // Calculate percentage without the 10000 multiplier first
+                                        let percentage = diff / old_price;
+                                        // Then multiply by 10000, but cap at reasonable threshold
+                                        percentage.min(U256::from(10000)) * U256::from(10000)
+                                    }
+                                }
+                            } else if old_price == U256::ZERO && new_price > U256::ZERO {
+                                // First price update - use a reasonable threshold instead of MAX
+                                // Set to a high but not MAX value that will trigger price change events
+                                U256::from(10000) // 100% change in basis points
                             } else {
-                                U256::MAX // First price update
+                                U256::ZERO // No change if both prices are zero or new price is zero
                             };
 
                             let threshold_bp =
                                 U256::from((asset_config.price_change_threshold * 10000.0) as u64);
 
-                            if price_change > threshold_bp || old_price == U256::ZERO {
+                            if price_change > threshold_bp || (old_price == U256::ZERO && new_price > U256::ZERO) {
                                 feed.last_price = new_price;
                                 feed.last_updated = Utc::now();
 
                                 let change_pct = if old_price > U256::ZERO {
-                                    price_change.as_limbs()[0] as f64 / 100.0
+                                    // Safe conversion to f64 for display
+                                    let change_u64 = if price_change <= U256::from(u64::MAX) {
+                                        price_change.try_into().unwrap_or(0u64)
+                                    } else {
+                                        1_000_000u64 // Cap at 1M basis points for display
+                                    };
+                                    change_u64.min(1_000_000) as f64 / 100.0
                                 } else {
                                     0.0
                                 };
@@ -243,12 +289,23 @@ where
                                 feed.last_price = new_price;
                                 feed.last_updated = Utc::now();
 
+                                let change_bp = if price_change <= U256::from(u64::MAX) {
+                                    price_change.try_into().unwrap_or(0u64)
+                                } else {
+                                    u64::MAX
+                                };
+                                let threshold_bp_val = if threshold_bp <= U256::from(u64::MAX) {
+                                    threshold_bp.try_into().unwrap_or(0u64)
+                                } else {
+                                    u64::MAX
+                                };
+                                
                                 info!(
                                     "📊 {} price stable: {} (change: {}bp, need: {}bp)",
                                     asset_config.symbol,
                                     new_price,
-                                    price_change.as_limbs()[0],
-                                    threshold_bp.as_limbs()[0]
+                                    change_bp,
+                                    threshold_bp_val
                                 );
 
                                 // Trigger a lighter oracle price change event even for smaller movements
@@ -291,7 +348,12 @@ where
     P: Provider,
 {
     // Create a simple call to the price feed's latestAnswer() function
-    let call_data = alloy_primitives::hex::decode("50d25bcd").unwrap(); // latestAnswer() selector
+    let call_data = match alloy_primitives::hex::decode("50d25bcd") {
+        Ok(data) => data,
+        Err(e) => {
+            return Err(eyre::eyre!("Failed to decode latestAnswer selector: {}", e));
+        }
+    };
 
     let call_request = alloy_rpc_types::TransactionRequest {
         to: Some(feed_address.into()),
