@@ -15,6 +15,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
+// Threshold constants for health factor calculations (in 18 decimals)
+const LIQUIDATION_THRESHOLD: u64 = 1000000000000000000; // 1.0 * 1e18 - liquidation can occur
+const CRITICAL_THRESHOLD: u64 = 1100000000000000000;    // 1.1 * 1e18 - critically at risk 
+const CHANGE_THRESHOLD: u64 = 10000000000000000;        // 0.01 * 1e18 - 1% change for logging
+
 /// Guard to ensure user is removed from processing set when dropped
 struct ProcessingGuard {
     user: Address,
@@ -53,7 +58,14 @@ fn format_health_factor(hf: U256) -> String {
     // Health factors are in 18 decimals (wei-like format)
     // Convert to human readable by dividing by 10^18
     let hf_str = hf.to_string();
-    let hf_f64: f64 = hf_str.parse::<f64>().unwrap_or(0.0) / 1e18;
+    let hf_f64: f64 = match hf_str.parse::<f64>() {
+        Ok(val) => val / 1e18,
+        Err(_) => {
+            // Fallback for very large numbers that can't be parsed as f64
+            // Just show the raw value
+            return format!("{} (parse_error)", hf);
+        }
+    };
     format!("{} ({:.3})", hf, hf_f64)
 }
 
@@ -107,7 +119,8 @@ where
     let ltv = parse_u256_from_result(&result, 4, "ltv")?;
     let health_factor = parse_u256_from_result(&result, 5, "health_factor")?;
 
-    // Use configurable threshold instead of hardcoded 1.2
+    // Use the configurable threshold for consistent at-risk detection
+    // This threshold should be set above the liquidation threshold (1.0) to provide early warning
     let is_at_risk = health_factor < health_factor_threshold;
 
     let position = UserPosition {
@@ -176,25 +189,24 @@ where
             // For now, we'll add this user to WETH collateral as a fallback since that's what we monitor
             if let Some(users_by_collateral) = &users_by_collateral {
                 if position.total_collateral_base > U256::ZERO {
-                    // Base Sepolia WETH address - Use proper error handling instead of unwrap
-                    let weth_address: Address =
-                        match "0x4200000000000000000000000000000000000006".parse() {
-                            Ok(addr) => addr,
-                            Err(e) => {
-                                error!("Failed to parse WETH address: {}", e);
-                                return Ok(());
-                            }
-                        };
-                    users_by_collateral
-                        .entry(weth_address)
-                        .or_insert_with(HashSet::new)
-                        .insert(user);
-                    debug!("Added user {:?} to WETH collateral tracking", user);
+                    // Base Sepolia WETH address - in production, you'd call getUserConfiguration
+                    match "0x4200000000000000000000000000000000000006".parse::<Address>() {
+                        Ok(weth_address) => {
+                            users_by_collateral
+                                .entry(weth_address)
+                                .or_insert_with(HashSet::new)
+                                .insert(user);
+                            debug!("Added user {:?} to WETH collateral tracking", user);
+                        }
+                        Err(e) => {
+                            error!("Failed to parse WETH address for collateral tracking: {}", e);
+                        }
+                    }
                 }
             }
 
             // Check for liquidation opportunity
-            if position.health_factor < U256::from(10u128.pow(18))
+            if position.health_factor < U256::from(LIQUIDATION_THRESHOLD)
                 && position.total_debt_base > U256::ZERO
             {
                 let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
@@ -230,8 +242,8 @@ where
                             old_pos.health_factor - position.health_factor
                         };
 
-                        // Log if health factor changed by more than 1% (0.01 * 1e18)
-                        let change_threshold = U256::from(10000000000000000u64); // 0.01 * 1e18
+                        // Log if health factor changed by more than 1%
+                        let change_threshold = U256::from(CHANGE_THRESHOLD);
 
                         if hf_diff > change_threshold {
                             let direction = if position.health_factor > old_pos.health_factor {
@@ -248,8 +260,8 @@ where
                                 format_health_factor(position.health_factor)
                             );
                         } else {
-                            // Log ongoing at-risk status if health factor is dangerously low (< 1.1)
-                            let danger_threshold = U256::from(1100000000000000000u64); // 1.1 * 1e18
+                            // Log ongoing at-risk status if health factor is dangerously low
+                            let danger_threshold = U256::from(CRITICAL_THRESHOLD);
                             if position.health_factor < danger_threshold {
                                 info!(
                                     "🚨 CRITICALLY AT-RISK USER (ongoing): {:?} (HF: {} - NEAR LIQUIDATION!)",
@@ -346,7 +358,7 @@ pub async fn start_status_reporter(
             .count();
         let liquidatable_count = user_positions
             .iter()
-            .filter(|entry| entry.value().health_factor < U256::from(10u128.pow(18)))
+            .filter(|entry| entry.value().health_factor < U256::from(LIQUIDATION_THRESHOLD))
             .count();
 
         info!(

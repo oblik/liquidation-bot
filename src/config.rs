@@ -13,7 +13,8 @@ pub struct BotConfig {
     pub gas_price_multiplier: u64,
     pub target_user: Option<Address>,
     pub database_url: String,
-    pub health_factor_threshold: U256, // Alert if HF below this (e.g., 1.1)
+    pub health_factor_threshold: U256, // Alert/at-risk threshold (e.g., 1.1)
+                                        // Should be > 1.0 (liquidation threshold) for early warning
     pub monitoring_interval_secs: u64,
 }
 

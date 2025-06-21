@@ -19,39 +19,28 @@ pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
     // Only including verified working oracle feeds
 
     // WETH - CONFIRMED WORKING ✅
-    let weth_address = match "0x4200000000000000000000000000000000000006".parse() {
-        Ok(addr) => addr,
-        Err(e) => {
+    match (
+        "0x4200000000000000000000000000000000000006".parse::<Address>(),
+        "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1".parse::<Address>(),
+    ) {
+        (Ok(weth_address), Ok(weth_feed_address)) => {
+            configs.insert(
+                weth_address,
+                AssetConfig {
+                    address: weth_address,
+                    symbol: "WETH".to_string(),
+                    chainlink_feed: weth_feed_address, // ETH/USD on Base Sepolia ✅
+                    price_change_threshold: 0.005, // 0.5% price change threshold (reduced from 2%)
+                },
+            );
+        }
+        (Err(e), _) => {
             error!("Failed to parse WETH address: {}", e);
-            return configs;
         }
-    };
-
-    let weth_asset_address = match "0x4200000000000000000000000000000000000006".parse() {
-        Ok(addr) => addr,
-        Err(e) => {
-            error!("Failed to parse WETH asset address: {}", e);
-            return configs;
+        (_, Err(e)) => {
+            error!("Failed to parse WETH chainlink feed address: {}", e);
         }
-    };
-
-    let chainlink_feed_address = match "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1".parse() {
-        Ok(addr) => addr,
-        Err(e) => {
-            error!("Failed to parse Chainlink feed address: {}", e);
-            return configs;
-        }
-    };
-
-    configs.insert(
-        weth_address,
-        AssetConfig {
-            address: weth_asset_address,
-            symbol: "WETH".to_string(),
-            chainlink_feed: chainlink_feed_address, // ETH/USD on Base Sepolia ✅
-            price_change_threshold: 0.005,          // 0.5% price change threshold (reduced from 2%)
-        },
-    );
+    }
 
     // Note: USDC/USDT oracle feeds are not available or working on Base Sepolia testnet
     // In production on Base mainnet, you would add:
@@ -350,9 +339,9 @@ where
     let call_data = match alloy_primitives::hex::decode("50d25bcd") {
         Ok(data) => data,
         Err(e) => {
-            return Err(eyre::eyre!("Failed to decode latestAnswer selector: {}", e));
+            return Err(eyre::eyre!("Failed to decode latestAnswer() selector: {}", e));
         }
-    };
+    }; // latestAnswer() selector
 
     let call_request = alloy_rpc_types::TransactionRequest {
         to: Some(feed_address.into()),
