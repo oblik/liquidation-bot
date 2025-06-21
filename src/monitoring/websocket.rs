@@ -24,11 +24,12 @@ where
     P: Provider + 'static,
 {
     // Check if we're using WebSocket or HTTP fallback
-    let using_websocket = ws_url.starts_with("wss://") && !ws_url.contains("sepolia.base.org");
+    // More specific check: only disable websockets if it's clearly an HTTP URL
+    let using_websocket = ws_url.starts_with("wss://") || ws_url.starts_with("ws://");
 
     if !using_websocket {
         info!("Event monitoring initialized (using HTTP polling mode)");
-        warn!("WebSocket event subscriptions skipped - using periodic polling instead");
+        warn!("WebSocket event subscriptions skipped - URL does not use WebSocket protocol");
         warn!("For real-time monitoring, configure WS_URL with a proper WebSocket RPC endpoint");
         return Ok(());
     }
