@@ -2187,6 +2187,7 @@ dependencies = [
  "alloy-sol-types",
  "alloy-transport",
  "anyhow",
+ "async-trait",
  "chrono",
  "dashmap 5.5.3",
  "dotenvy",

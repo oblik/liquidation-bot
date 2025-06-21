@@ -9,13 +9,15 @@ use sqlx::{Pool, Sqlite};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::config::BotConfig;
 use crate::database;
 use crate::events::BotEvent;
 use crate::liquidation;
-use crate::models::{AssetConfig, HardhatArtifact, PriceFeed, UserPosition};
+use crate::models::{
+    AssetConfig, HardhatArtifact, LiquidationAssetConfig, PriceFeed, UserPosition,
+};
 use crate::monitoring::{oracle, scanner, websocket};
 
 // Main bot struct with event monitoring capabilities
@@ -35,6 +37,9 @@ pub struct LiquidationBot<P> {
     price_feeds: Arc<DashMap<Address, PriceFeed>>,
     asset_configs: HashMap<Address, AssetConfig>,
     users_by_collateral: Arc<DashMap<Address, HashSet<Address>>>, // asset -> users holding it as collateral
+    // Liquidation functionality
+    liquidation_assets: HashMap<Address, LiquidationAssetConfig>,
+    liquidator_contract_address: Option<Address>,
 }
 
 impl<P> LiquidationBot<P>
@@ -85,6 +90,18 @@ where
         // Initialize asset configurations for Base Sepolia
         let asset_configs = oracle::init_asset_configs();
 
+        // Initialize liquidation asset configurations
+        let liquidation_assets = liquidation::init_base_sepolia_assets();
+
+        // Get liquidator contract address from config
+        let liquidator_contract_address = config.liquidator_contract;
+
+        if let Some(addr) = liquidator_contract_address {
+            info!("✅ Liquidator contract configured at: {:?}", addr);
+        } else {
+            warn!("⚠️ Liquidator contract not configured - liquidation execution will be disabled");
+        }
+
         info!("✅ Bot initialized with signer for transaction signing capability");
 
         Ok(Self {
@@ -103,6 +120,9 @@ where
             price_feeds: Arc::new(DashMap::new()),
             asset_configs,
             users_by_collateral: Arc::new(DashMap::new()),
+            // Liquidation functionality
+            liquidation_assets,
+            liquidator_contract_address,
         })
     }
 
@@ -137,10 +157,15 @@ where
                     }
                 }
                 BotEvent::LiquidationOpportunity(user) => {
+                    // Use enhanced liquidation handler if possible, fallback to legacy
                     if let Err(e) = liquidation::handle_liquidation_opportunity(
+                        self.provider.clone(),
                         &self.db_pool,
                         user,
                         self.config.min_profit_threshold,
+                        self.liquidator_contract_address,
+                        Some(self.signer.clone()),
+                        &self.pool_contract,
                     )
                     .await
                     {
@@ -148,6 +173,17 @@ where
                             "Failed to handle liquidation opportunity for {:?}: {}",
                             user, e
                         );
+
+                        // Fallback to legacy handler for logging
+                        if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
+                            &self.db_pool,
+                            user,
+                            self.config.min_profit_threshold,
+                        )
+                        .await
+                        {
+                            error!("Legacy liquidation handler also failed: {}", legacy_err);
+                        }
                     }
                 }
                 BotEvent::PriceUpdate(asset, _old_price, _new_price) => {
