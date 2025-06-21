@@ -4,11 +4,11 @@ use alloy_provider::Provider;
 use alloy_signer_local::PrivateKeySigner;
 use dashmap::DashMap;
 use eyre::Result;
+use parking_lot::RwLock as SyncRwLock;
 use sqlx::{Pool, Sqlite};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
-use parking_lot::RwLock as SyncRwLock;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::config::BotConfig;

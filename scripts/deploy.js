@@ -11,21 +11,21 @@ async function main() {
   // Network-specific addresses
   const networkAddresses = {
     "base": {
-      poolAddress: "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
-      addressesProvider: "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e",
-      swapRouter: "0x2626664c2603336E57B271c5C0b26F421741e481"
+      poolAddress: ethers.utils.getAddress("0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"),
+      addressesProvider: ethers.utils.getAddress("0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e"),
+      swapRouter: ethers.utils.getAddress("0x2626664c2603336E57B271c5C0b26F421741e481")
     },
     "base-sepolia": {
-      poolAddress: "0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b",
-      addressesProvider: "0x0D8176C0e8965F2730c4C1aA5aAE816fE4b7a802",
-      swapRouter: "0x8357227D4eDd91C4f85615C9cC5761899CD4B068"
+      poolAddress: ethers.utils.getAddress("0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b"),
+      addressesProvider: ethers.utils.getAddress("0x0d8176c0e8965f2730c4c1aa5aae816fe4b7a802"),
+      swapRouter: ethers.utils.getAddress("0x8357227d4edd91c4f85615c9cc5761899cd4b068")
     }
   };
 
   // Get addresses for current network
   const currentNetwork = network.name;
   const addresses = networkAddresses[currentNetwork];
-  
+
   if (!addresses) {
     throw new Error(`Unsupported network: ${currentNetwork}. Supported networks: ${Object.keys(networkAddresses).join(", ")}`);
   }

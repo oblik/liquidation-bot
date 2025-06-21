@@ -8,11 +8,11 @@ use alloy_provider::Provider;
 use chrono::Utc;
 use dashmap::DashMap;
 use eyre::Result;
+use parking_lot::RwLock as SyncRwLock;
 use sqlx::{Pool, Sqlite};
 use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
-use parking_lot::RwLock as SyncRwLock;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 /// Guard to ensure user is removed from processing set when dropped
@@ -23,12 +23,15 @@ struct ProcessingGuard {
 
 impl ProcessingGuard {
     fn new(user: Address, processing_users: Arc<SyncRwLock<HashSet<Address>>>) -> Option<Self> {
-        let mut processing = processing_users.write();
-        if processing.contains(&user) {
-            debug!("User {:?} already being processed, skipping", user);
-            return None;
-        }
-        processing.insert(user);
+        {
+            let mut processing = processing_users.write();
+            if processing.contains(&user) {
+                debug!("User {:?} already being processed, skipping", user);
+                return None;
+            }
+            processing.insert(user);
+        } // Explicit scope ensures `processing` is dropped here
+
         Some(ProcessingGuard {
             user,
             processing_users,
