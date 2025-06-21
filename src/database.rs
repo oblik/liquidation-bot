@@ -7,6 +7,12 @@ use tracing::info;
 pub async fn init_database(database_url: &str) -> Result<Pool<Sqlite>> {
     let pool = sqlx::SqlitePool::connect(database_url).await?;
 
+    // Verify database connection is working
+    sqlx::query("SELECT 1")
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| eyre::eyre!("Database connection verification failed: {}", e))?;
+
     // Create tables if they don't exist
     sqlx::query(
         r#"

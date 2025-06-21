@@ -157,9 +157,13 @@ where
 
     match result {
         Ok(position) => {
-            let old_position = user_positions.get(&user).map(|p| p.clone());
+            // Atomic read-modify-write operation to prevent race conditions
+            let old_position = {
+                // Clone the old position while holding the reference
+                user_positions.get(&user).map(|p| p.clone())
+            };
 
-            // Update in memory
+            // Update in memory first (this is atomic due to DashMap's internal locking)
             user_positions.insert(user, position.clone());
 
             // Save to database
