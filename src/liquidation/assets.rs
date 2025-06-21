@@ -49,16 +49,19 @@ pub fn init_base_sepolia_assets() -> HashMap<Address, LiquidationAssetConfig> {
     assets.insert(cbeth.address, cbeth);
 
     // DAI - Decentralized stablecoin
+    // DISABLED: DAI is not officially available on Base Sepolia testnet via Aave V3
+    // Base Sepolia only supports: WETH, USDC, cbETH based on official Aave deployments
+    // TODO: Re-enable when migrating to Base Mainnet or a network that supports DAI
     let dai = LiquidationAssetConfig {
         address: "0xcf4dA3b4F6e7c1a2bC6e45b0C8b3d9d8e7f2C5B1"
             .parse()
-            .unwrap(), // Placeholder - verify actual address
+            .unwrap(), // Placeholder - DAI not available on Base Sepolia
         symbol: "DAI".to_string(),
         decimals: 18,
         asset_id: 3,
-        liquidation_bonus: 500, // 5% liquidation bonus
-        is_collateral: true,
-        is_borrowable: true,
+        liquidation_bonus: 500, // 5%
+        is_collateral: false,   // DISABLED: DAI not supported on Base Sepolia testnet
+        is_borrowable: false,   // DISABLED: DAI not supported on Base Sepolia testnet
     };
     assets.insert(dai.address, dai);
 
@@ -227,15 +230,15 @@ mod tests {
         };
         assets.insert(cbeth.address, cbeth);
 
-        // DAI - same bonus as WETH
+        // DAI - same bonus as WETH but DISABLED (not available on Base Sepolia)
         let dai = LiquidationAssetConfig {
             address: Address::from_str("0xcf4dA3b4F6e7c1a2bC6e45b0C8b3d9d8e7f2C5B1").unwrap(),
             symbol: "DAI".to_string(),
             decimals: 18,
             asset_id: 3,
             liquidation_bonus: 500, // 5%
-            is_collateral: true,
-            is_borrowable: true,
+            is_collateral: false,   // DISABLED: DAI not supported on Base Sepolia testnet
+            is_borrowable: false,   // DISABLED: DAI not supported on Base Sepolia testnet
         };
         assets.insert(dai.address, dai);
 
@@ -335,15 +338,15 @@ mod tests {
         }
 
         let weth_addr = Address::from_str("0x4200000000000000000000000000000000000006").unwrap();
-        let dai_addr = Address::from_str("0xcf4dA3b4F6e7c1a2bC6e45b0C8b3d9d8e7f2C5B1").unwrap();
+        let usdc_addr = Address::from_str("0x036CbD53842c5426634e7929541eC2318f3dCF7e").unwrap();
 
         let user_collateral = vec![weth_addr, cbeth_addr];
-        let user_debt = vec![dai_addr];
+        let user_debt = vec![usdc_addr];
 
         let result = find_best_liquidation_pair(&assets, &user_collateral, &user_debt);
 
-        // Should select WETH/DAI since cbETH can't be used as collateral
-        assert_eq!(result, Some((weth_addr, dai_addr)));
+        // Should select WETH/USDC since cbETH can't be used as collateral
+        assert_eq!(result, Some((weth_addr, usdc_addr)));
     }
 
     #[test]
