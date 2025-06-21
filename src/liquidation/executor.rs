@@ -168,17 +168,22 @@ where
         Err(eyre::eyre!("Transaction confirmation timeout"))
     }
 
-    /// Get asset ID for L2Pool encoding - this would be looked up from your asset config
+    /// Get asset ID for L2Pool encoding - uses direct address comparison for reliability
     fn get_asset_id(&self, asset_address: Address) -> Result<u16> {
-        // Hardcoded asset IDs for Base Sepolia - in production, use a proper mapping
-        match format!("{:?}", asset_address).as_str() {
-            "0x4200000000000000000000000000000000000006" => Ok(0), // WETH
-            "0x036CbD53842c5426634e7929541eC2318f3dCF7e" => Ok(1), // USDC
-            "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22" => Ok(2), // cbETH
-            _ => {
-                error!("Unknown asset address: {:?}", asset_address);
-                Err(eyre::eyre!("Unknown asset address"))
-            }
+        // Use direct address comparison instead of fragile string matching
+        let weth_addr: Address = "0x4200000000000000000000000000000000000006".parse()?;
+        let usdc_addr: Address = "0x036CbD53842c5426634e7929541eC2318f3dCF7e".parse()?;
+        let cbeth_addr: Address = "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22".parse()?;
+
+        if asset_address == weth_addr {
+            Ok(0) // WETH
+        } else if asset_address == usdc_addr {
+            Ok(1) // USDC
+        } else if asset_address == cbeth_addr {
+            Ok(2) // cbETH
+        } else {
+            error!("Unknown asset address: {:#x}", asset_address);
+            Err(eyre::eyre!("Unknown asset address: {:#x}", asset_address))
         }
     }
 

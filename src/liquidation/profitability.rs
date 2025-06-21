@@ -123,8 +123,11 @@ async fn estimate_gas_cost<P>(provider: Arc<P>) -> Result<GasEstimate>
 where
     P: Provider,
 {
-    // Get current gas price from provider (returns u128)
-    let gas_price_u128 = provider.get_gas_price().await.unwrap_or(1_000_000_000); // 1 gwei fallback
+    // Get current gas price from provider (returns Result<u128, Error>)
+    let gas_price_u128 = provider
+        .get_gas_price()
+        .await
+        .unwrap_or_else(|_| 20_000_000_000); // 20 gwei fallback (realistic for modern networks)
 
     // Convert to U256 for calculations
     let gas_price = U256::from(gas_price_u128);

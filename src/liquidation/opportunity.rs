@@ -298,7 +298,8 @@ async fn get_user_position_from_db(
     db_pool: &Pool<Sqlite>,
     user: Address,
 ) -> Result<Option<UserPosition>> {
-    let user_str = format!("{:?}", user);
+    // Use checksummed hex representation for consistent address matching
+    let user_str = format!("{:#x}", user);
 
     let row = sqlx::query!("SELECT * FROM user_positions WHERE address = ?", user_str)
         .fetch_optional(db_pool)
@@ -328,9 +329,10 @@ async fn save_liquidation_record(
     opportunity: &crate::models::LiquidationOpportunity,
     tx_hash: &str,
 ) -> Result<()> {
-    let user_str = format!("{:?}", opportunity.user);
-    let collateral_str = format!("{:?}", opportunity.collateral_asset);
-    let debt_str = format!("{:?}", opportunity.debt_asset);
+    // Use checksummed hex representation for consistent address storage
+    let user_str = format!("{:#x}", opportunity.user);
+    let collateral_str = format!("{:#x}", opportunity.collateral_asset);
+    let debt_str = format!("{:#x}", opportunity.debt_asset);
     let debt_covered_str = opportunity.debt_to_cover.to_string();
     let collateral_received_str = opportunity.expected_collateral_received.to_string();
     let profit_str = opportunity.estimated_profit.to_string();
