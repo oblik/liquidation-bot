@@ -26,8 +26,16 @@ where
     let user_config_call = pool_contract.function("getUserConfiguration", &user_config_args)?;
     let user_config_result = user_config_call.call().await?;
 
+    // Validate that we have at least one element in the result
+    if user_config_result.is_empty() {
+        return Err(eyre::eyre!("Empty user configuration result"));
+    }
+
     // Extract the configuration data from the tuple
     let config_data = if let alloy_dyn_abi::DynSolValue::Tuple(tuple) = &user_config_result[0] {
+        if tuple.is_empty() {
+            return Err(eyre::eyre!("Empty user configuration tuple"));
+        }
         if let alloy_dyn_abi::DynSolValue::Uint(data, _) = &tuple[0] {
             *data
         } else {
@@ -40,6 +48,11 @@ where
     // Get reserves list
     let reserves_call = pool_contract.function("getReservesList", &[])?;
     let reserves_result = reserves_call.call().await?;
+
+    // Validate that we have at least one element in the result
+    if reserves_result.is_empty() {
+        return Err(eyre::eyre!("Empty reserves list result"));
+    }
 
     // Extract reserves array
     let reserves: Vec<Address> =
