@@ -1,6 +1,7 @@
 use alloy_contract::{ContractInstance, Interface};
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
+use alloy_signer_local::PrivateKeySigner;
 use dashmap::DashMap;
 use eyre::Result;
 use sqlx::{Pool, Sqlite};
@@ -20,6 +21,7 @@ use crate::monitoring::{oracle, scanner, websocket};
 pub struct LiquidationBot<P> {
     provider: Arc<P>,
     ws_provider: Arc<dyn Provider>,
+    signer: PrivateKeySigner,
     pub config: BotConfig,
     pool_contract: ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     _liquidator_contract: Option<ContractInstance<alloy_transport::BoxTransport, Arc<P>>>,
@@ -38,7 +40,15 @@ impl<P> LiquidationBot<P>
 where
     P: Provider + 'static,
 {
-    pub async fn new(provider: Arc<P>, config: BotConfig) -> Result<Self> {
+    /// Get a reference to the signer for transaction signing
+    pub fn signer(&self) -> &PrivateKeySigner {
+        &self.signer
+    }
+    pub async fn new(
+        provider: Arc<P>,
+        config: BotConfig,
+        signer: PrivateKeySigner,
+    ) -> Result<Self> {
         // Load ABI of L2Pool from Hardhat artifact
         let artifact_str = include_str!("../abi/L2Pool.json");
         let artifact: HardhatArtifact = serde_json::from_str(artifact_str)?;
@@ -74,9 +84,12 @@ where
         // Initialize asset configurations for Base Sepolia
         let asset_configs = oracle::init_asset_configs();
 
+        info!("✅ Bot initialized with signer for transaction signing capability");
+
         Ok(Self {
             provider,
             ws_provider,
+            signer,
             config,
             pool_contract,
             _liquidator_contract,

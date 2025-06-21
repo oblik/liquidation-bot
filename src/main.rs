@@ -20,18 +20,21 @@ async fn main() -> Result<()> {
     info!("Configuration loaded");
 
     // Parse private key and create signer
-    let _signer: PrivateKeySigner = config.private_key.parse()?;
+    let signer: PrivateKeySigner = config.private_key.parse()?;
     info!("Signer created from private key");
 
-    // Build HTTP provider with signer for transactions
+    // Build HTTP provider
     let url = url::Url::parse(&config.rpc_url)?;
     let provider = ProviderBuilder::new().on_http(url).boxed();
     let provider = Arc::new(provider);
     info!("HTTP Provider connected to: {}", config.rpc_url);
+
+    // Signer will be passed to the bot for transaction signing
+    info!("✅ Signer ready for transaction signing");
     info!("WebSocket will connect to: {}", config.ws_url);
 
-    // Create bot instance
-    let bot = LiquidationBot::new(provider, config).await?;
+    // Create bot instance with signer for transaction signing
+    let bot = LiquidationBot::new(provider, config, signer).await?;
 
     let using_websocket =
         bot.config.ws_url.starts_with("wss://") && !bot.config.ws_url.contains("sepolia.base.org");
