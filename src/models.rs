@@ -103,3 +103,48 @@ pub struct UserPosition {
     pub last_updated: DateTime<Utc>,
     pub is_at_risk: bool,
 }
+
+#[derive(Debug, Clone)]
+pub struct LiquidationAssetConfig {
+    pub address: Address,
+    pub symbol: String,
+    pub decimals: u8,
+    pub asset_id: u16, // For L2Pool encoding
+    pub liquidation_bonus: u16, // In basis points (e.g., 500 = 5%)
+    pub is_collateral: bool,
+    pub is_borrowable: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct LiquidationOpportunity {
+    pub user: Address,
+    pub collateral_asset: Address,
+    pub debt_asset: Address,
+    pub debt_to_cover: U256,
+    pub expected_collateral_received: U256,
+    pub liquidation_bonus: U256,
+    pub flash_loan_fee: U256,
+    pub gas_cost: U256,
+    pub swap_slippage: U256,
+    pub estimated_profit: U256,
+    pub profit_threshold_met: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct LiquidationParams {
+    pub user: Address,
+    pub collateral_asset: Address,
+    pub debt_asset: Address,
+    pub debt_to_cover: U256,
+    pub collateral_asset_id: u16,
+    pub debt_asset_id: u16,
+    pub receive_a_token: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct GasEstimate {
+    pub base_fee: U256,
+    pub priority_fee: U256,
+    pub gas_limit: U256,
+    pub total_cost: U256,
+}
