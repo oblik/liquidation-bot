@@ -86,6 +86,7 @@ pub async fn check_user_health<P>(
     _provider: Arc<P>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     user: Address,
+    health_factor_threshold: U256,
 ) -> Result<UserPosition>
 where
     P: Provider,
@@ -106,7 +107,8 @@ where
     let ltv = parse_u256_from_result(&result, 4, "ltv")?;
     let health_factor = parse_u256_from_result(&result, 5, "health_factor")?;
 
-    let is_at_risk = health_factor < U256::from(1200000000000000000u64); // 1.2 in 18 decimals
+    // Use configurable threshold instead of hardcoded 1.2
+    let is_at_risk = health_factor < health_factor_threshold;
 
     let position = UserPosition {
         address: user,
@@ -151,7 +153,7 @@ where
         None => return Ok(()), // User already being processed
     };
 
-    let result = check_user_health(provider, pool_contract, user).await;
+    let result = check_user_health(provider, pool_contract, user, health_factor_threshold).await;
 
     match result {
         Ok(position) => {
@@ -170,10 +172,15 @@ where
             // For now, we'll add this user to WETH collateral as a fallback since that's what we monitor
             if let Some(users_by_collateral) = &users_by_collateral {
                 if position.total_collateral_base > U256::ZERO {
-                    // Base Sepolia WETH address - in production, you'd call getUserConfiguration
-                    let weth_address: Address = "0x4200000000000000000000000000000000000006"
-                        .parse()
-                        .unwrap();
+                    // Base Sepolia WETH address - Use proper error handling instead of unwrap
+                    let weth_address: Address =
+                        match "0x4200000000000000000000000000000000000006".parse() {
+                            Ok(addr) => addr,
+                            Err(e) => {
+                                error!("Failed to parse WETH address: {}", e);
+                                return Ok(());
+                            }
+                        };
                     users_by_collateral
                         .entry(weth_address)
                         .or_insert_with(HashSet::new)
