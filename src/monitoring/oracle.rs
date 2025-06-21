@@ -223,19 +223,34 @@ where
                                 // Use checked arithmetic for safe calculation
                                 match diff.checked_mul(U256::from(10000)) {
                                     Some(multiplied) => {
-                                        if old_price > U256::ZERO {
-                                            multiplied / old_price // Basis points
-                                        } else {
-                                            U256::ZERO
-                                        }
+                                        // We already know old_price > U256::ZERO from outer condition
+                                        multiplied / old_price // Basis points
                                     }
                                     None => {
-                                        // Overflow detected, calculate manually with reduced precision
+                                        // Overflow detected, calculate manually with preserved precision
                                         warn!("Price change calculation overflow for {}, using fallback calculation", asset_config.symbol);
-                                        // Calculate percentage without the 10000 multiplier first
-                                        let percentage = diff / old_price;
-                                        // Then multiply by 10000, but cap at reasonable threshold
-                                        percentage.min(U256::from(10000)) * U256::from(10000)
+
+                                        // If diff >= old_price, it's at least 100% change
+                                        if diff >= old_price {
+                                            // Calculate how many times larger diff is compared to old_price
+                                            let multiple = diff / old_price;
+                                            // Cap at a reasonable maximum (e.g., 1000% = 100,000 basis points)
+                                            (multiple * U256::from(10000)).min(U256::from(100000))
+                                        } else {
+                                            // For changes less than 100%, use step-by-step calculation to avoid truncation
+                                            // Calculate (diff * 100) / old_price first, then multiply by 100
+                                            match diff.checked_mul(U256::from(100)) {
+                                                Some(diff_100) => {
+                                                    let percentage_100 = diff_100 / old_price;
+                                                    percentage_100 * U256::from(100)
+                                                    // Convert to basis points
+                                                }
+                                                None => {
+                                                    // Even diff * 100 overflows, this is still a massive change
+                                                    U256::from(100000) // Cap at 1000%
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             } else if old_price == U256::ZERO && new_price > U256::ZERO {
