@@ -28,8 +28,8 @@ module.exports = {
       gasPrice: "auto",
       gas: "auto"
     },
-    "base-goerli": {
-      url: process.env.BASE_GOERLI_RPC || "https://goerli.base.org",
+    "base-sepolia": {
+      url: process.env.BASE_SEPOLIA_RPC || "https://sepolia.base.org",
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
       gasPrice: "auto",
       gas: "auto"
@@ -39,7 +39,8 @@ module.exports = {
     outDir: "typechain-types",
     target: "ethers-v5",
     alwaysGenerateOverloads: false,
-    externalArtifacts: ["node_modules/@aave/core-v3/artifacts/contracts/**/*.sol/*.json"]
+    // Commented out problematic external artifacts that cause ABI parsing errors
+    // externalArtifacts: ["node_modules/@aave/core-v3/artifacts/contracts/**/*.sol/*.json"]
   },
   paths: {
     sources: "./contracts",

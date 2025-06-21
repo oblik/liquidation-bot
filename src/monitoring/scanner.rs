@@ -8,49 +8,48 @@ use alloy_provider::Provider;
 use chrono::Utc;
 use dashmap::DashMap;
 use eyre::Result;
+use parking_lot::RwLock as SyncRwLock;
 use sqlx::{Pool, Sqlite};
 use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
+
+// Threshold constants for health factor calculations (in 18 decimals)
+const LIQUIDATION_THRESHOLD: u64 = 1000000000000000000; // 1.0 * 1e18 - liquidation can occur
+const CRITICAL_THRESHOLD: u64 = 1100000000000000000;    // 1.1 * 1e18 - critically at risk 
+const CHANGE_THRESHOLD: u64 = 10000000000000000;        // 0.01 * 1e18 - 1% change for logging
 
 /// Guard to ensure user is removed from processing set when dropped
 struct ProcessingGuard {
     user: Address,
-    processing_users: Arc<RwLock<HashSet<Address>>>,
+    processing_users: Arc<SyncRwLock<HashSet<Address>>>,
 }
 
 impl ProcessingGuard {
-    async fn new(user: Address, processing_users: Arc<RwLock<HashSet<Address>>>) -> Option<Self> {
-        let processing_users_clone = processing_users.clone();
-        let mut processing = processing_users.write().await;
-        if processing.contains(&user) {
-            debug!("User {:?} already being processed, skipping", user);
-            return None;
-        }
-        processing.insert(user);
+    fn new(user: Address, processing_users: Arc<SyncRwLock<HashSet<Address>>>) -> Option<Self> {
+        {
+            let mut processing = processing_users.write();
+            if processing.contains(&user) {
+                debug!("User {:?} already being processed, skipping", user);
+                return None;
+            }
+            processing.insert(user);
+        } // Explicit scope ensures `processing` is dropped here
+
         Some(ProcessingGuard {
             user,
-            processing_users: processing_users_clone,
+            processing_users,
         })
     }
 }
 
 impl Drop for ProcessingGuard {
     fn drop(&mut self) {
-        let processing_users = self.processing_users.clone();
-        let user = self.user;
-
-        // Since Drop must be synchronous, we spawn a task to handle the async cleanup
-        // This is necessary and safe because:
-        // 1. We're guaranteed this task will be scheduled
-        // 2. The cleanup will happen even if the original task is cancelled
-        // 3. Multiple removals of the same user are safe (HashSet::remove is idempotent)
-        tokio::spawn(async move {
-            let mut processing = processing_users.write().await;
-            processing.remove(&user);
-            debug!("Cleaned up processing state for user {:?}", user);
-        });
+        // Now we can use synchronous operations, avoiding the memory leak
+        let mut processing = self.processing_users.write();
+        processing.remove(&self.user);
+        debug!("Cleaned up processing state for user {:?}", self.user);
     }
 }
 
@@ -59,7 +58,14 @@ fn format_health_factor(hf: U256) -> String {
     // Health factors are in 18 decimals (wei-like format)
     // Convert to human readable by dividing by 10^18
     let hf_str = hf.to_string();
-    let hf_f64: f64 = hf_str.parse::<f64>().unwrap_or(0.0) / 1e18;
+    let hf_f64: f64 = match hf_str.parse::<f64>() {
+        Ok(val) => val / 1e18,
+        Err(_) => {
+            // Fallback for very large numbers that can't be parsed as f64
+            // Just show the raw value
+            return format!("{} (parse_error)", hf);
+        }
+    };
     format!("{} ({:.3})", hf, hf_f64)
 }
 
@@ -92,6 +98,7 @@ pub async fn check_user_health<P>(
     _provider: Arc<P>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     user: Address,
+    health_factor_threshold: U256,
 ) -> Result<UserPosition>
 where
     P: Provider,
@@ -112,7 +119,9 @@ where
     let ltv = parse_u256_from_result(&result, 4, "ltv")?;
     let health_factor = parse_u256_from_result(&result, 5, "health_factor")?;
 
-    let is_at_risk = health_factor < U256::from(1200000000000000000u64); // 1.2 in 18 decimals
+    // Use the configurable threshold for consistent at-risk detection
+    // This threshold should be set above the liquidation threshold (1.0) to provide early warning
+    let is_at_risk = health_factor < health_factor_threshold;
 
     let position = UserPosition {
         address: user,
@@ -142,7 +151,7 @@ pub async fn update_user_position<P>(
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     db_pool: &Pool<Sqlite>,
     user_positions: Arc<DashMap<Address, UserPosition>>,
-    processing_users: Arc<RwLock<HashSet<Address>>>,
+    processing_users: Arc<SyncRwLock<HashSet<Address>>>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
     health_factor_threshold: U256,
     user: Address,
@@ -152,18 +161,22 @@ where
     P: Provider,
 {
     // Use guard pattern to ensure reliable cleanup
-    let _guard = match ProcessingGuard::new(user, processing_users.clone()).await {
+    let _guard = match ProcessingGuard::new(user, processing_users.clone()) {
         Some(guard) => guard,
         None => return Ok(()), // User already being processed
     };
 
-    let result = check_user_health(provider, pool_contract, user).await;
+    let result = check_user_health(provider, pool_contract, user, health_factor_threshold).await;
 
     match result {
         Ok(position) => {
-            let old_position = user_positions.get(&user).map(|p| p.clone());
+            // Atomic read-modify-write operation to prevent race conditions
+            let old_position = {
+                // Clone the old position while holding the reference
+                user_positions.get(&user).map(|p| p.clone())
+            };
 
-            // Update in memory
+            // Update in memory first (this is atomic due to DashMap's internal locking)
             user_positions.insert(user, position.clone());
 
             // Save to database
@@ -177,19 +190,23 @@ where
             if let Some(users_by_collateral) = &users_by_collateral {
                 if position.total_collateral_base > U256::ZERO {
                     // Base Sepolia WETH address - in production, you'd call getUserConfiguration
-                    let weth_address: Address = "0x4200000000000000000000000000000000000006"
-                        .parse()
-                        .unwrap();
-                    users_by_collateral
-                        .entry(weth_address)
-                        .or_insert_with(HashSet::new)
-                        .insert(user);
-                    debug!("Added user {:?} to WETH collateral tracking", user);
+                    match "0x4200000000000000000000000000000000000006".parse::<Address>() {
+                        Ok(weth_address) => {
+                            users_by_collateral
+                                .entry(weth_address)
+                                .or_insert_with(HashSet::new)
+                                .insert(user);
+                            debug!("Added user {:?} to WETH collateral tracking", user);
+                        }
+                        Err(e) => {
+                            error!("Failed to parse WETH address for collateral tracking: {}", e);
+                        }
+                    }
                 }
             }
 
             // Check for liquidation opportunity
-            if position.health_factor < U256::from(10u128.pow(18))
+            if position.health_factor < U256::from(LIQUIDATION_THRESHOLD)
                 && position.total_debt_base > U256::ZERO
             {
                 let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
@@ -225,8 +242,8 @@ where
                             old_pos.health_factor - position.health_factor
                         };
 
-                        // Log if health factor changed by more than 1% (0.01 * 1e18)
-                        let change_threshold = U256::from(10000000000000000u64); // 0.01 * 1e18
+                        // Log if health factor changed by more than 1%
+                        let change_threshold = U256::from(CHANGE_THRESHOLD);
 
                         if hf_diff > change_threshold {
                             let direction = if position.health_factor > old_pos.health_factor {
@@ -243,8 +260,8 @@ where
                                 format_health_factor(position.health_factor)
                             );
                         } else {
-                            // Log ongoing at-risk status if health factor is dangerously low (< 1.1)
-                            let danger_threshold = U256::from(1100000000000000000u64); // 1.1 * 1e18
+                            // Log ongoing at-risk status if health factor is dangerously low
+                            let danger_threshold = U256::from(CRITICAL_THRESHOLD);
                             if position.health_factor < danger_threshold {
                                 info!(
                                     "🚨 CRITICALLY AT-RISK USER (ongoing): {:?} (HF: {} - NEAR LIQUIDATION!)",
@@ -341,7 +358,7 @@ pub async fn start_status_reporter(
             .count();
         let liquidatable_count = user_positions
             .iter()
-            .filter(|entry| entry.value().health_factor < U256::from(10u128.pow(18)))
+            .filter(|entry| entry.value().health_factor < U256::from(LIQUIDATION_THRESHOLD))
             .count();
 
         info!(

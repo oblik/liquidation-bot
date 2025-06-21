@@ -1,6 +1,6 @@
 # Aave v3 Liquidation Bot for Base Network
 
-This is a sophisticated Aave v3 liquidation bot for the Base network, written in Rust using the modern [alloy](https://github.com/alloy-rs/alloy) Ethereum libraries. The bot monitors user health factors and can execute profitable liquidations using flash loans.
+This is an Aave v3 liquidation bot for the Base network, written in Rust using the modern [alloy](https://github.com/alloy-rs/alloy) Ethereum libraries. The bot monitors user health factors and can execute profitable liquidations using flash loans.
 
 ## ✅ Current Status
 

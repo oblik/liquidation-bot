@@ -4,10 +4,11 @@ use alloy_provider::Provider;
 use alloy_signer_local::PrivateKeySigner;
 use dashmap::DashMap;
 use eyre::Result;
+use parking_lot::RwLock as SyncRwLock;
 use sqlx::{Pool, Sqlite};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::config::BotConfig;
@@ -27,7 +28,7 @@ pub struct LiquidationBot<P> {
     _liquidator_contract: Option<ContractInstance<alloy_transport::BoxTransport, Arc<P>>>,
     db_pool: Pool<Sqlite>,
     user_positions: Arc<DashMap<Address, UserPosition>>,
-    processing_users: Arc<RwLock<HashSet<Address>>>,
+    processing_users: Arc<SyncRwLock<HashSet<Address>>>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
     event_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<BotEvent>>>,
     // Oracle price monitoring
@@ -95,7 +96,7 @@ where
             _liquidator_contract,
             db_pool,
             user_positions: Arc::new(DashMap::new()),
-            processing_users: Arc::new(RwLock::new(HashSet::new())),
+            processing_users: Arc::new(SyncRwLock::new(HashSet::new())),
             event_tx,
             event_rx: Arc::new(tokio::sync::Mutex::new(event_rx)),
             // Oracle price monitoring
