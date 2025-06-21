@@ -19,14 +19,22 @@ import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRoute
 contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // Aave v3 Pool address on Base mainnet
-    address private constant POOL_ADDRESS = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
-    
-    // Aave v3 PoolAddressesProvider on Base mainnet
-    address private constant ADDRESSES_PROVIDER_ADDRESS = 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e;
-    
-    // Uniswap V3 SwapRouter on Base
-    address public constant SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
+    // Network-specific addresses - configurable at deployment
+    address private immutable POOL_ADDRESS;
+    address private immutable ADDRESSES_PROVIDER_ADDRESS;
+    address private immutable SWAP_ROUTER;
+
+    /* Network Address Reference:
+     * Base Mainnet:
+     *   - Pool: 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5
+     *   - AddressesProvider: 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e
+     *   - SwapRouter: 0x2626664c2603336E57B271c5C0b26F421741e481
+     * 
+     * Base Sepolia Testnet:
+     *   - Pool: 0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b
+     *   - AddressesProvider: 0x0D8176C0e8965F2730c4C1aA5aAE816fE4b7a802
+     *   - SwapRouter: 0x8357227D4eDd91C4f85615C9cC5761899CD4B068
+     */
     
     // Maximum slippage tolerance (5% in basis points)
     uint256 public constant MAX_SLIPPAGE = 500;
@@ -59,7 +67,19 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         address indexed to
     );
 
-    constructor() Ownable() {}
+    constructor(
+        address _poolAddress,
+        address _addressesProviderAddress,
+        address _swapRouter
+    ) Ownable() {
+        require(_poolAddress != address(0), "Invalid pool address");
+        require(_addressesProviderAddress != address(0), "Invalid addresses provider");
+        require(_swapRouter != address(0), "Invalid swap router address");
+        
+        POOL_ADDRESS = _poolAddress;
+        ADDRESSES_PROVIDER_ADDRESS = _addressesProviderAddress;
+        SWAP_ROUTER = _swapRouter;
+    }
 
     // Required by IFlashLoanReceiver
     function POOL() external view returns (IPool) {
@@ -329,8 +349,22 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
     /**
      * @notice Get the Aave Pool address
      */
-    function getPool() external pure returns (address) {
+    function getPool() external view returns (address) {
         return POOL_ADDRESS;
+    }
+
+    /**
+     * @notice Get the Uniswap V3 SwapRouter address
+     */
+    function getSwapRouter() external view returns (address) {
+        return SWAP_ROUTER;
+    }
+
+    /**
+     * @notice Get the Aave AddressesProvider address
+     */
+    function getAddressesProvider() external view returns (address) {
+        return ADDRESSES_PROVIDER_ADDRESS;
     }
 
     // Allow contract to receive ETH

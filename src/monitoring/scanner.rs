@@ -12,18 +12,18 @@ use sqlx::{Pool, Sqlite};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
+use parking_lot::RwLock as SyncRwLock;
 use tracing::{debug, error, info};
 
 /// Guard to ensure user is removed from processing set when dropped
 struct ProcessingGuard {
     user: Address,
-    processing_users: Arc<RwLock<HashSet<Address>>>,
+    processing_users: Arc<SyncRwLock<HashSet<Address>>>,
 }
 
 impl ProcessingGuard {
-    async fn new(user: Address, processing_users: Arc<RwLock<HashSet<Address>>>) -> Option<Self> {
-        let processing_users_clone = processing_users.clone();
-        let mut processing = processing_users.write().await;
+    fn new(user: Address, processing_users: Arc<SyncRwLock<HashSet<Address>>>) -> Option<Self> {
+        let mut processing = processing_users.write();
         if processing.contains(&user) {
             debug!("User {:?} already being processed, skipping", user);
             return None;
@@ -31,26 +31,17 @@ impl ProcessingGuard {
         processing.insert(user);
         Some(ProcessingGuard {
             user,
-            processing_users: processing_users_clone,
+            processing_users,
         })
     }
 }
 
 impl Drop for ProcessingGuard {
     fn drop(&mut self) {
-        let processing_users = self.processing_users.clone();
-        let user = self.user;
-
-        // Since Drop must be synchronous, we spawn a task to handle the async cleanup
-        // This is necessary and safe because:
-        // 1. We're guaranteed this task will be scheduled
-        // 2. The cleanup will happen even if the original task is cancelled
-        // 3. Multiple removals of the same user are safe (HashSet::remove is idempotent)
-        tokio::spawn(async move {
-            let mut processing = processing_users.write().await;
-            processing.remove(&user);
-            debug!("Cleaned up processing state for user {:?}", user);
-        });
+        // Now we can use synchronous operations, avoiding the memory leak
+        let mut processing = self.processing_users.write();
+        processing.remove(&self.user);
+        debug!("Cleaned up processing state for user {:?}", self.user);
     }
 }
 
@@ -142,7 +133,7 @@ pub async fn update_user_position<P>(
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     db_pool: &Pool<Sqlite>,
     user_positions: Arc<DashMap<Address, UserPosition>>,
-    processing_users: Arc<RwLock<HashSet<Address>>>,
+    processing_users: Arc<SyncRwLock<HashSet<Address>>>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
     health_factor_threshold: U256,
     user: Address,
@@ -152,7 +143,7 @@ where
     P: Provider,
 {
     // Use guard pattern to ensure reliable cleanup
-    let _guard = match ProcessingGuard::new(user, processing_users.clone()).await {
+    let _guard = match ProcessingGuard::new(user, processing_users.clone()) {
         Some(guard) => guard,
         None => return Ok(()), // User already being processed
     };
