@@ -60,8 +60,8 @@ where
         let artifact: HardhatArtifact = serde_json::from_str(artifact_str)?;
         let interface = Interface::new(artifact.abi);
 
-        // Aave V3 Pool address on Base Sepolia testnet
-        let pool_addr: Address = "0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b".parse()?;
+        // Aave V3 Pool address on Base  mainnet
+        let pool_addr: Address = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2".parse()?;
         let pool_contract = interface.connect(pool_addr, provider.clone());
 
         // Try to create WebSocket provider for event monitoring
