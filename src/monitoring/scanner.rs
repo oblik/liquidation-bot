@@ -189,7 +189,7 @@ where
             // For now, we'll add this user to WETH collateral as a fallback since that's what we monitor
             if let Some(users_by_collateral) = &users_by_collateral {
                 if position.total_collateral_base > U256::ZERO {
-                    // Base Sepolia WETH address - in production, you'd call getUserConfiguration
+                    // Base mainnet WETH address
                     match "0x4200000000000000000000000000000000000006".parse::<Address>() {
                         Ok(weth_address) => {
                             users_by_collateral
