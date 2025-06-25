@@ -33,7 +33,7 @@ The liquidation bot has been enhanced with **complete profitability calculation 
 ## 🔧 Key Components
 
 ### Smart Contract Integration
-- **Contract Address**: Uses deployed contract at `0x501B7f2E7162B59F11E986025202aAaA9d80a1AE`
+- **Contract Address**: Uses deployed contract at `0x88cd7c9ef3fBFEBe3492eeC683d86c5E825d1e04` (Base Mainnet)
 - **ABI Integration**: Dynamic ABI loading for contract interaction
 - **Parameter Encoding**: Proper L2Pool parameter encoding for gas efficiency
 
@@ -77,7 +77,7 @@ The liquidation bot has been enhanced with **complete profitability calculation 
 ### Environment Configuration
 ```bash
 # Required for full functionality
-LIQUIDATOR_CONTRACT=0x501B7f2E7162B59F11E986025202aAaA9d80a1AE
+LIQUIDATOR_CONTRACT=0x88cd7c9ef3fBFEBe3492eeC683d86c5E825d1e04
 MIN_PROFIT_THRESHOLD=1000000000000000000  # 1 ETH in wei
 GAS_PRICE_MULTIPLIER=2
 ```
