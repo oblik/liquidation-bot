@@ -14,7 +14,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration, Instant};
+use std::time::SystemTime;
 
 // Threshold constants for health factor calculations (in 18 decimals)
 const LIQUIDATION_THRESHOLD: u64 = 1000000000000000000; // 1.0 * 1e18 - liquidation can occur
@@ -105,40 +106,49 @@ where
     P: Provider,
 {
     let mut attempt = 0;
-    let mut delay = Duration::from_millis(100); // Start with 100ms delay
+    let mut base_delay = Duration::from_millis(100);
 
     loop {
         attempt += 1;
         
         match try_check_user_health(provider, pool_address, user_address).await {
-            Ok(position) => return Ok(position),
+            Ok(data) => return Ok(data),
             Err(e) => {
                 let error_msg = e.to_string();
                 
-                // Check if it's a rate limit error
-                if error_msg.contains("429") || error_msg.contains("rate limit") {
-                    if attempt <= max_retries {
-                        warn!(
-                            "Rate limited on attempt {} for user {:#x}, retrying in {:?}...", 
-                            attempt, user_address, delay
-                        );
-                        sleep(delay).await;
-                        
-                        // Exponential backoff: double the delay each time, max 10 seconds
-                        delay = std::cmp::min(delay * 2, Duration::from_secs(10));
-                        continue;
-                    } else {
-                        error!(
-                            "Max retries ({}) exceeded for user {:#x} due to rate limiting", 
-                            max_retries, user_address
-                        );
+                // Check for rate limiting or network errors
+                if error_msg.contains("429") || 
+                   error_msg.contains("rate limit") || 
+                   error_msg.contains("too many requests") ||
+                   error_msg.contains("connection") ||
+                   error_msg.contains("timeout") {
+                    
+                    if attempt >= max_retries {
+                        error!("Max retries ({}) exceeded for user health check: {}", max_retries, e);
                         return Err(e);
                     }
-                } else {
-                    // Non-rate-limit error, don't retry
-                    error!("Failed to check user health for {:#x}: {}", user_address, e);
-                    return Err(e);
+                    
+                    // Exponential backoff with jitter
+                    let jitter_ms = (SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() % 100) as u64;
+                    let jitter = Duration::from_millis(jitter_ms);
+                    let delay = base_delay + jitter;
+                    
+                    warn!(
+                        "Rate limited or network error (attempt {}/{}), retrying in {:?}: {}",
+                        attempt, max_retries, delay, error_msg
+                    );
+                    
+                    sleep(delay).await;
+                    base_delay = std::cmp::min(base_delay * 2, Duration::from_secs(30)); // Cap at 30s
+                    continue;
                 }
+                
+                // For other errors, fail immediately
+                error!("User health check failed for {}: {}", user_address, e);
+                return Err(e);
             }
         }
     }
@@ -157,47 +167,54 @@ where
     // Create contract instance for this call
     let contract = ContractInstance::new(pool_address, provider.clone());
     
-    // Call getUserAccountData
-    let args = [alloy_dyn_abi::DynSolValue::Address(user_address)];
-    let call = contract.function("getUserAccountData", &args)?;
-    let result = call.call().await?;
+    // Call getUserAccountData with proper error handling
+    let call_data = match alloy_primitives::hex::decode("bf92857c") {
+        Ok(data) => data,
+        Err(e) => {
+            return Err(eyre::eyre!("Failed to decode getUserAccountData selector: {}", e));
+        }
+    };
 
-    // Parse the result with proper error handling
-    if result.len() != 6 {
+    // Encode the user address parameter
+    let mut full_call_data = call_data;
+    let mut user_bytes = [0u8; 32];
+    user_address.to_fixed_bytes().iter().enumerate().for_each(|(i, &b)| {
+        user_bytes[i + 12] = b; // Address is 20 bytes, pad to 32
+    });
+    full_call_data.extend_from_slice(&user_bytes);
+
+    let call_request = alloy_rpc_types::TransactionRequest {
+        to: Some(pool_address.into()),
+        input: alloy_rpc_types::TransactionInput::new(full_call_data.into()),
+        ..Default::default()
+    };
+
+    let result = provider.call(&call_request).await?;
+    
+    // Parse the result - getUserAccountData returns 6 uint256 values
+    if result.len() < 192 { // 6 * 32 bytes
         return Err(eyre::eyre!(
-            "Invalid getUserAccountData response length: expected 6, got {}",
+            "Invalid response length from getUserAccountData: {} bytes, expected at least 192",
             result.len()
         ));
     }
 
-    // Extract the values safely
-    let total_collateral_base = result[0]
-        .as_uint()
-        .ok_or_else(|| eyre::eyre!("Failed to parse totalCollateralBase"))?
-        .0;
-    let total_debt_base = result[1]
-        .as_uint()
-        .ok_or_else(|| eyre::eyre!("Failed to parse totalDebtBase"))?
-        .0;
-    let available_borrows_base = result[2]
-        .as_uint()
-        .ok_or_else(|| eyre::eyre!("Failed to parse availableBorrowsBase"))?
-        .0;
-    let current_liquidation_threshold = result[3]
-        .as_uint()
-        .ok_or_else(|| eyre::eyre!("Failed to parse currentLiquidationThreshold"))?
-        .0;
-    let ltv = result[4]
-        .as_uint()
-        .ok_or_else(|| eyre::eyre!("Failed to parse ltv"))?
-        .0;
-    let health_factor = result[5]
-        .as_uint()
-        .ok_or_else(|| eyre::eyre!("Failed to parse healthFactor"))?
-        .0;
+    // Parse the 6 uint256 values returned by getUserAccountData
+    let total_collateral_base = U256::from_be_slice(&result[0..32]);
+    let total_debt_base = U256::from_be_slice(&result[32..64]);
+    let available_borrows_base = U256::from_be_slice(&result[64..96]);
+    let current_liquidation_threshold = U256::from_be_slice(&result[96..128]);
+    let ltv = U256::from_be_slice(&result[128..160]);
+    let health_factor = U256::from_be_slice(&result[160..192]);
 
-    // Use the liquidation threshold for at-risk detection
-    let is_at_risk = health_factor < U256::from(LIQUIDATION_THRESHOLD);
+    debug!(
+        "User {} health data: collateral={}, debt={}, health_factor={}",
+        user_address, total_collateral_base, total_debt_base, health_factor
+    );
+
+    // Check if user is at risk (health factor < 1.1)
+    let risk_threshold = U256::from(1100000000000000000u64); // 1.1 in 18 decimals
+    let is_at_risk = health_factor < risk_threshold && health_factor > U256::ZERO;
 
     let position = UserPosition {
         address: user_address,
@@ -210,15 +227,6 @@ where
         last_updated: chrono::Utc::now(),
         is_at_risk,
     };
-
-    info!(
-        "📊 User {:?} health check: HF={}, Collateral={}, Debt={}, At-risk={}",
-        user_address,
-        format_health_factor(health_factor),
-        total_collateral_base,
-        total_debt_base,
-        is_at_risk
-    );
 
     Ok(position)
 }
@@ -257,7 +265,7 @@ where
             user_positions.insert(user, position.clone());
 
             // Save to database
-            if let Err(e) = database::save_user_position(db_pool, &position).await {
+            if let Err(e) = crate::database::save_user_position(db_pool, &position).await {
                 error!("Failed to save user position: {}", e);
             }
 
@@ -406,13 +414,73 @@ pub async fn run_periodic_scan(
 
         info!("Scanning {} at-risk users", at_risk_users.len());
 
-        for user_addr in at_risk_users {
-            let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr));
+        // Check health for each user with rate limiting
+        let mut checked_users = 0;
+        let mut at_risk_users_count = 0;
+
+        for user in &at_risk_users {
+            // Add small delay between checks to avoid rate limiting
+            if checked_users > 0 && checked_users % 10 == 0 {
+                sleep(Duration::from_millis(200)).await; // Brief pause every 10 users
+            }
+
+            match check_user_health(provider, pool_address, *user, 3).await {
+                Ok(position) => {
+                    checked_users += 1;
+                    
+                    if position.is_at_risk {
+                        at_risk_users_count += 1;
+                        info!(
+                            "⚠️  At-risk user found: {:?} (HF: {})",
+                            user,
+                            format_health_factor(position.health_factor)
+                        );
+
+                        // Store in database
+                        if let Err(e) = crate::database::save_user_position(db_pool, &position).await {
+                            error!("Failed to store user position: {}", e);
+                        }
+
+                        // Send to liquidation opportunity channel
+                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(*user)) {
+                            warn!("Failed to send liquidation opportunity: {}", e);
+                        }
+                    }
+
+                    // Brief delay between individual checks
+                    sleep(Duration::from_millis(50)).await;
+                }
+                Err(e) => {
+                    error!("Failed to check user health for {:?}: {}", user, e);
+                    // Continue with next user rather than failing completely
+                }
+            }
         }
 
         // If we have a specific target user, always check them
         if let Some(target_user) = config.target_user {
             let _ = event_tx.send(BotEvent::UserPositionChanged(target_user));
+        }
+
+        info!(
+            "📊 Status Report: {} positions tracked, {} at risk, {} liquidatable",
+            at_risk_users.len(), at_risk_users_count,
+            at_risk_users.len() - at_risk_users_count
+        );
+
+        if let Err(e) = database::log_monitoring_event(
+            &db_pool,
+            "status_report",
+            None,
+            Some(&format!(
+                "positions:{}, at_risk:{}, liquidatable:{}",
+                at_risk_users.len(), at_risk_users_count,
+                at_risk_users.len() - at_risk_users_count
+            )),
+        )
+        .await
+        {
+            error!("Failed to log status report: {}", e);
         }
     }
 }
