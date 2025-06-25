@@ -60,8 +60,8 @@ where
         let artifact: HardhatArtifact = serde_json::from_str(artifact_str)?;
         let interface = Interface::new(artifact.abi);
 
-        // Aave V3 Pool address on Base Sepolia testnet
-        let pool_addr: Address = "0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b".parse()?;
+        // Aave V3 Pool address on Base mainnet
+        let pool_addr: Address = "0xA37D7E3d3CaD89b44f9a08A96fE01a9F39Bd7794".parse()?;
         let pool_contract = interface.connect(pool_addr, provider.clone());
 
         // Try to create WebSocket provider for event monitoring
@@ -87,11 +87,11 @@ where
         // Create event channels for internal communication
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
-        // Initialize asset configurations for Base Sepolia
+        // Initialize asset configurations for Base mainnet
         let asset_configs = oracle::init_asset_configs();
 
         // Initialize liquidation asset configurations
-        let liquidation_assets = liquidation::init_base_sepolia_assets();
+        let liquidation_assets = liquidation::init_base_mainnet_assets();
 
         // Get liquidator contract address from config
         let liquidator_contract_address = config.liquidator_contract;

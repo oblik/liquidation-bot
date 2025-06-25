@@ -202,7 +202,7 @@ where
 
                 // Verify it matches expected Base Sepolia pool
                 let expected_pool: Address =
-                    "0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b".parse()?;
+                    "0xA37D7E3d3CaD89b44f9a08A96fE01a9F39Bd7794".parse()?;
                 if addr == expected_pool {
                     info!("✅ Pool address verification successful");
                 } else {

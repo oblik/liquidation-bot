@@ -31,7 +31,7 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
      *   - SwapRouter: 0x2626664c2603336E57B271c5C0b26F421741e481
      * 
      * Base Sepolia Testnet:
-     *   - Pool: 0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b
+     *   - Pool: 0xA37D7E3d3CaD89b44f9a08A96fE01a9F39Bd7794
      *   - AddressesProvider: 0x0D8176C0e8965F2730c4C1aA5aAE816fE4b7a802
      *   - SwapRouter: 0x8357227D4eDd91C4f85615C9cC5761899CD4B068
      */

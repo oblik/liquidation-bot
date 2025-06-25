@@ -1,0 +1,14 @@
+{
+  "network": "base",
+  "chainId": 8453,
+  "contractAddress": "0x501B7f2E7162B59F11E986025202aAaA9d80a1AE",
+  "deployerAddress": "0xA1Fea2492FDf821a0e78026aECa64DF14C4c1506",
+  "deploymentTx": "TBD",
+  "blockNumber": 0,
+  "timestamp": "2025-01-25T10:00:00.000Z",
+  "constructorArguments": {
+    "poolAddress": "0xA37D7E3d3CaD89b44f9a08A96fE01a9F39Bd7794",
+    "addressesProvider": "0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D",
+    "swapRouter": "0x2626664c2603336E57B271c5C0b26F421741e481"
+  }
+}

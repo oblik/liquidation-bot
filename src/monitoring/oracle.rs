@@ -15,13 +15,13 @@ use tracing::{debug, error, info, warn};
 pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
     let mut configs = HashMap::new();
 
-    // Base Sepolia testnet asset configurations
-    // Only including verified working oracle feeds
+    // Base mainnet asset configurations
+    // Using Chainlink oracle feeds for Base mainnet
 
-    // WETH - CONFIRMED WORKING ✅
+    // WETH - Base mainnet
     match (
         "0x4200000000000000000000000000000000000006".parse::<Address>(),
-        "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1".parse::<Address>(),
+        "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70".parse::<Address>(),
     ) {
         (Ok(weth_address), Ok(weth_feed_address)) => {
             configs.insert(
@@ -29,8 +29,8 @@ pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
                 AssetConfig {
                     address: weth_address,
                     symbol: "WETH".to_string(),
-                    chainlink_feed: weth_feed_address, // ETH/USD on Base Sepolia ✅
-                    price_change_threshold: 0.005, // 0.5% price change threshold (reduced from 2%)
+                    chainlink_feed: weth_feed_address, // ETH/USD on Base mainnet
+                    price_change_threshold: 0.005, // 0.5% price change threshold
                 },
             );
         }
@@ -42,12 +42,34 @@ pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
         }
     }
 
-    // Note: USDC/USDT oracle feeds are not available or working on Base Sepolia testnet
-    // In production on Base mainnet, you would add:
-    // - USDC: Different oracle address
+    // USDC - Base mainnet
+    match (
+        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".parse::<Address>(),
+        "0x7e860098F58bBFC8648a4311b374B1D669a2bc6B".parse::<Address>(),
+    ) {
+        (Ok(usdc_address), Ok(usdc_feed_address)) => {
+            configs.insert(
+                usdc_address,
+                AssetConfig {
+                    address: usdc_address,
+                    symbol: "USDC".to_string(),
+                    chainlink_feed: usdc_feed_address, // USDC/USD on Base mainnet
+                    price_change_threshold: 0.002, // 0.2% for stablecoin
+                },
+            );
+        }
+        (Err(e), _) => {
+            error!("Failed to parse USDC address: {}", e);
+        }
+        (_, Err(e)) => {
+            error!("Failed to parse USDC chainlink feed address: {}", e);
+        }
+    }
+
+    // Additional assets available on Base mainnet (add as needed):
+    // - cbETH: Different oracle address
+    // - DAI: Different oracle address  
     // - USDT: Different oracle address
-    // - DAI: Different oracle address
-    // For now, focusing on working WETH oracle for demonstration
 
     info!(
         "Initialized {} asset configuration(s) for oracle monitoring",
