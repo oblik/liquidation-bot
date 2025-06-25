@@ -2,9 +2,9 @@ use crate::config::BotConfig;
 use crate::database;
 use crate::events::BotEvent;
 use crate::models::UserPosition;
-use alloy_contract::ContractInstance;
-use alloy_primitives::{Address, U256};
-use alloy_provider::Provider;
+use alloy::contract::ContractInstance;
+use alloy::primitives::{Address, U256};
+use alloy::providers::Provider;
 use chrono::Utc;
 use dashmap::DashMap;
 use eyre::Result;
@@ -13,7 +13,8 @@ use sqlx::{Pool, Sqlite};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
+use tokio::time::{sleep, Duration};
 
 // Threshold constants for health factor calculations (in 18 decimals)
 const LIQUIDATION_THRESHOLD: u64 = 1000000000000000000; // 1.0 * 1e18 - liquidation can occur
@@ -95,54 +96,130 @@ fn parse_u256_from_result(
 }
 
 pub async fn check_user_health<P>(
-    _provider: Arc<P>,
-    pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
-    user: Address,
-    health_factor_threshold: U256,
+    provider: &Arc<P>,
+    pool_address: Address,
+    user_address: Address,
+    max_retries: u32,
 ) -> Result<UserPosition>
 where
     P: Provider,
 {
-    debug!("Checking health factor for user: {:?}", user);
+    let mut attempt = 0;
+    let mut delay = Duration::from_millis(100); // Start with 100ms delay
 
+    loop {
+        attempt += 1;
+        
+        match try_check_user_health(provider, pool_address, user_address).await {
+            Ok(position) => return Ok(position),
+            Err(e) => {
+                let error_msg = e.to_string();
+                
+                // Check if it's a rate limit error
+                if error_msg.contains("429") || error_msg.contains("rate limit") {
+                    if attempt <= max_retries {
+                        warn!(
+                            "Rate limited on attempt {} for user {:#x}, retrying in {:?}...", 
+                            attempt, user_address, delay
+                        );
+                        sleep(delay).await;
+                        
+                        // Exponential backoff: double the delay each time, max 10 seconds
+                        delay = std::cmp::min(delay * 2, Duration::from_secs(10));
+                        continue;
+                    } else {
+                        error!(
+                            "Max retries ({}) exceeded for user {:#x} due to rate limiting", 
+                            max_retries, user_address
+                        );
+                        return Err(e);
+                    }
+                } else {
+                    // Non-rate-limit error, don't retry
+                    error!("Failed to check user health for {:#x}: {}", user_address, e);
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
+
+async fn try_check_user_health<P>(
+    provider: &Arc<P>,
+    pool_address: Address,
+    user_address: Address,
+) -> Result<UserPosition>
+where
+    P: Provider,
+{
+    debug!("Checking health factor for user: {:?}", user_address);
+
+    // Create contract instance for this call
+    let contract = ContractInstance::new(pool_address, provider.clone());
+    
     // Call getUserAccountData
-    let args = [alloy_dyn_abi::DynSolValue::Address(user)];
-    let call = pool_contract.function("getUserAccountData", &args)?;
+    let args = [alloy_dyn_abi::DynSolValue::Address(user_address)];
+    let call = contract.function("getUserAccountData", &args)?;
     let result = call.call().await?;
 
     // Parse the result with proper error handling
-    let total_collateral_base = parse_u256_from_result(&result, 0, "total_collateral_base")?;
-    let total_debt_base = parse_u256_from_result(&result, 1, "total_debt_base")?;
-    let available_borrows_base = parse_u256_from_result(&result, 2, "available_borrows_base")?;
-    let current_liquidation_threshold =
-        parse_u256_from_result(&result, 3, "current_liquidation_threshold")?;
-    let ltv = parse_u256_from_result(&result, 4, "ltv")?;
-    let health_factor = parse_u256_from_result(&result, 5, "health_factor")?;
+    if result.len() != 6 {
+        return Err(eyre::eyre!(
+            "Invalid getUserAccountData response length: expected 6, got {}",
+            result.len()
+        ));
+    }
 
-    // Use the configurable threshold for consistent at-risk detection
-    // This threshold should be set above the liquidation threshold (1.0) to provide early warning
-    let is_at_risk = health_factor < health_factor_threshold;
+    // Extract the values safely
+    let total_collateral_base = result[0]
+        .as_uint()
+        .ok_or_else(|| eyre::eyre!("Failed to parse totalCollateralBase"))?
+        .0;
+    let total_debt_base = result[1]
+        .as_uint()
+        .ok_or_else(|| eyre::eyre!("Failed to parse totalDebtBase"))?
+        .0;
+    let available_borrows_base = result[2]
+        .as_uint()
+        .ok_or_else(|| eyre::eyre!("Failed to parse availableBorrowsBase"))?
+        .0;
+    let current_liquidation_threshold = result[3]
+        .as_uint()
+        .ok_or_else(|| eyre::eyre!("Failed to parse currentLiquidationThreshold"))?
+        .0;
+    let ltv = result[4]
+        .as_uint()
+        .ok_or_else(|| eyre::eyre!("Failed to parse ltv"))?
+        .0;
+    let health_factor = result[5]
+        .as_uint()
+        .ok_or_else(|| eyre::eyre!("Failed to parse healthFactor"))?
+        .0;
+
+    // Use the liquidation threshold for at-risk detection
+    let is_at_risk = health_factor < U256::from(LIQUIDATION_THRESHOLD);
 
     let position = UserPosition {
-        address: user,
+        address: user_address,
         total_collateral_base,
         total_debt_base,
         available_borrows_base,
         current_liquidation_threshold,
         ltv,
         health_factor,
-        last_updated: Utc::now(),
+        last_updated: chrono::Utc::now(),
         is_at_risk,
     };
 
     info!(
         "📊 User {:?} health check: HF={}, Collateral={}, Debt={}, At-risk={}",
-        user,
+        user_address,
         format_health_factor(health_factor),
         total_collateral_base,
         total_debt_base,
         is_at_risk
     );
+
     Ok(position)
 }
 
@@ -166,7 +243,7 @@ where
         None => return Ok(()), // User already being processed
     };
 
-    let result = check_user_health(provider, pool_contract, user, health_factor_threshold).await;
+    let result = check_user_health(&provider, pool_contract.address(), user, 3).await;
 
     match result {
         Ok(position) => {
