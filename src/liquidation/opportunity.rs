@@ -1,7 +1,6 @@
 use alloy_contract::ContractInstance;
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
-use chrono::Utc;
 use eyre::Result;
 use sqlx::{Pool, Sqlite};
 use std::sync::Arc;

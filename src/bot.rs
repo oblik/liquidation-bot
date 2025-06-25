@@ -309,6 +309,8 @@ where
             ),
             self.run_event_processor(),
             scanner::run_periodic_scan(
+                self.provider.clone(),
+                "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2".parse()?,
                 self.db_pool.clone(),
                 self.event_tx.clone(),
                 self.config.clone(),
