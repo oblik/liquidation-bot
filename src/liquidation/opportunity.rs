@@ -117,7 +117,7 @@ pub async fn handle_liquidation_opportunity<P>(
 where
     P: Provider + 'static,
 {
-    info!("🎯 LIQUIDATION OPPORTUNITY DETECTED for user: {}", user);
+    info!("🎯 LIQUIDATION OPPORTUNITY DETECTED for user: {:?}", user);
 
     // Log the opportunity detection
     database::log_monitoring_event(
@@ -132,7 +132,7 @@ where
     let user_position = match get_user_position_from_db(db_pool, user).await {
         Ok(Some(position)) => position,
         Ok(None) => {
-            warn!("User position not found in database: {}", user);
+            warn!("User position not found in database: {:?}", user);
             return Ok(());
         }
         Err(e) => {
@@ -157,12 +157,12 @@ where
 
     // Validate that user has both collateral and debt
     if user_collateral_assets.is_empty() {
-        warn!("User {} has no collateral assets - cannot liquidate", user);
+        warn!("User {:?} has no collateral assets - cannot liquidate", user);
         return Ok(());
     }
 
     if user_debt_assets.is_empty() {
-        warn!("User {} has no debt assets - nothing to liquidate", user);
+        warn!("User {:?} has no debt assets - nothing to liquidate", user);
         return Ok(());
     }
 
@@ -174,7 +174,7 @@ where
     ) {
         Some(pair) => pair,
         None => {
-            warn!("No suitable liquidation pair found for user: {}", user);
+            warn!("No suitable liquidation pair found for user: {:?}", user);
             return Ok(());
         }
     };
@@ -297,8 +297,8 @@ async fn get_user_position_from_db(
     db_pool: &Pool<Sqlite>,
     user: Address,
 ) -> Result<Option<UserPosition>> {
-    // Use checksummed hex representation for consistent address matching
-    let user_str = format!("{:#x}", user);
+    // Use lowercase hex representation for consistent address matching (matches database storage format)
+    let user_str = user.to_string().to_lowercase();
 
     let row = sqlx::query!("SELECT * FROM user_positions WHERE address = ?", user_str)
         .fetch_optional(db_pool)
@@ -328,10 +328,10 @@ async fn save_liquidation_record(
     opportunity: &crate::models::LiquidationOpportunity,
     tx_hash: &str,
 ) -> Result<()> {
-    // Use checksummed hex representation for consistent address storage
-    let user_str = format!("{:#x}", opportunity.user);
-    let collateral_str = format!("{:#x}", opportunity.collateral_asset);
-    let debt_str = format!("{:#x}", opportunity.debt_asset);
+    // Use lowercase hex representation for consistent address storage (matches database storage format)
+    let user_str = opportunity.user.to_string().to_lowercase();
+    let collateral_str = opportunity.collateral_asset.to_string().to_lowercase();
+    let debt_str = opportunity.debt_asset.to_string().to_lowercase();
     let debt_covered_str = opportunity.debt_to_cover.to_string();
     let collateral_received_str = opportunity.expected_collateral_received.to_string();
     let profit_str = opportunity.estimated_profit.to_string();
@@ -374,7 +374,7 @@ pub async fn handle_liquidation_opportunity_legacy(
     )
     .await?;
 
-    info!("🎯 LIQUIDATION OPPORTUNITY DETECTED for user: {}", user);
+    info!("🎯 LIQUIDATION OPPORTUNITY DETECTED for user: {:?}", user);
     info!("⚠️  Enhanced liquidation execution requires provider and signer");
     info!("💰 Minimum profit threshold: {} wei", min_profit_threshold);
 
