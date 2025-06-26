@@ -270,10 +270,17 @@ where
             // Update in memory first (this is atomic due to DashMap's internal locking)
             user_positions.insert(user, position.clone());
 
-            // Save to database
-            if let Err(e) = crate::database::save_user_position(db_pool, &position).await {
-                error!("Failed to save user position: {}", e);
-            }
+            // Save to database first before any events
+            let database_save_successful = match crate::database::save_user_position(db_pool, &position).await {
+                Ok(()) => {
+                    debug!("✅ Successfully saved user position to database: {:?}", user);
+                    true
+                }
+                Err(e) => {
+                    error!("Failed to save user position for {:?}: {}", user, e);
+                    false
+                }
+            };
 
             // TODO: Populate users_by_collateral mapping by calling getUserConfiguration
             // and getReservesList to determine which assets this user has as collateral
@@ -299,10 +306,12 @@ where
                 }
             }
 
-            // Check for liquidation opportunity
-            if position.health_factor < U256::from(LIQUIDATION_THRESHOLD)
+            // Only check for liquidation opportunity if database save was successful
+            if database_save_successful 
+                && position.health_factor < U256::from(LIQUIDATION_THRESHOLD)
                 && position.total_debt_base > U256::ZERO
             {
+                debug!("🎯 Sending liquidation opportunity event for user: {:?}", user);
                 let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
             }
 

@@ -97,6 +97,9 @@ pub async fn init_database(database_url: &str) -> Result<Pool<Sqlite>> {
 }
 
 pub async fn save_user_position(db_pool: &Pool<Sqlite>, position: &UserPosition) -> Result<()> {
+    let address_str = position.address.to_string();
+    tracing::debug!("💾 Saving user position to database: {} (stored as: {})", position.address, address_str);
+    
     sqlx::query(
         r#"
         INSERT OR REPLACE INTO user_positions 
@@ -105,7 +108,7 @@ pub async fn save_user_position(db_pool: &Pool<Sqlite>, position: &UserPosition)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
-    .bind(position.address.to_string())
+    .bind(address_str)
     .bind(position.total_collateral_base.to_string())
     .bind(position.total_debt_base.to_string())
     .bind(position.available_borrows_base.to_string())

@@ -297,14 +297,17 @@ async fn get_user_position_from_db(
     db_pool: &Pool<Sqlite>,
     user: Address,
 ) -> Result<Option<UserPosition>> {
-    // Use lowercase hex representation for consistent address matching (matches database storage format)
-    let user_str = user.to_string().to_lowercase();
+    // Use checksummed hex representation to match database storage format (address.to_string() produces checksummed)
+    let user_str = user.to_string();
+    
+    debug!("🔍 Looking up user in database: {} (formatted as: {})", user, user_str);
 
     let row = sqlx::query!("SELECT * FROM user_positions WHERE address = ?", user_str)
         .fetch_optional(db_pool)
         .await?;
 
     if let Some(row) = row {
+        debug!("✅ Found user position in database: {}", user_str);
         let position = UserPosition {
             address: user,
             total_collateral_base: row.total_collateral_base.parse()?,
@@ -318,6 +321,7 @@ async fn get_user_position_from_db(
         };
         Ok(Some(position))
     } else {
+        debug!("❌ User position not found in database: {}", user_str);
         Ok(None)
     }
 }
@@ -328,10 +332,10 @@ async fn save_liquidation_record(
     opportunity: &crate::models::LiquidationOpportunity,
     tx_hash: &str,
 ) -> Result<()> {
-    // Use lowercase hex representation for consistent address storage (matches database storage format)
-    let user_str = opportunity.user.to_string().to_lowercase();
-    let collateral_str = opportunity.collateral_asset.to_string().to_lowercase();
-    let debt_str = opportunity.debt_asset.to_string().to_lowercase();
+    // Use checksummed hex representation for consistent address storage (matches database storage format)
+    let user_str = opportunity.user.to_string();
+    let collateral_str = opportunity.collateral_asset.to_string();
+    let debt_str = opportunity.debt_asset.to_string();
     let debt_covered_str = opportunity.debt_to_cover.to_string();
     let collateral_received_str = opportunity.expected_collateral_received.to_string();
     let profit_str = opportunity.estimated_profit.to_string();
