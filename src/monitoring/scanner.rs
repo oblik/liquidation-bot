@@ -271,16 +271,20 @@ where
             user_positions.insert(user, position.clone());
 
             // Save to database first before any events
-            let database_save_successful = match crate::database::save_user_position(db_pool, &position).await {
-                Ok(()) => {
-                    debug!("✅ Successfully saved user position to database: {:?}", user);
-                    true
-                }
-                Err(e) => {
-                    error!("Failed to save user position for {:?}: {}", user, e);
-                    false
-                }
-            };
+            let database_save_successful =
+                match crate::database::save_user_position(db_pool, &position).await {
+                    Ok(()) => {
+                        debug!(
+                            "✅ Successfully saved user position to database: {:?}",
+                            user
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        error!("Failed to save user position for {:?}: {}", user, e);
+                        false
+                    }
+                };
 
             // TODO: Populate users_by_collateral mapping by calling getUserConfiguration
             // and getReservesList to determine which assets this user has as collateral
@@ -307,11 +311,14 @@ where
             }
 
             // Only check for liquidation opportunity if database save was successful
-            if database_save_successful 
+            if database_save_successful
                 && position.health_factor < U256::from(LIQUIDATION_THRESHOLD)
                 && position.total_debt_base > U256::ZERO
             {
-                debug!("🎯 Sending liquidation opportunity event for user: {:?}", user);
+                debug!(
+                    "🎯 Sending liquidation opportunity event for user: {:?}",
+                    user
+                );
                 let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
             }
 
@@ -451,18 +458,6 @@ where
                 Ok(position) => {
                     checked_users += 1;
 
-                    // Save to database first
-                    let database_save_successful = match crate::database::save_user_position(&db_pool, &position).await {
-                        Ok(()) => {
-                            debug!("✅ Successfully saved user position to database: {:?}", user);
-                            true
-                        }
-                        Err(e) => {
-                            error!("Failed to save user position for {:?}: {}", user, e);
-                            false
-                        }
-                    };
-
                     if position.is_at_risk {
                         at_risk_users_count += 1;
                         info!(
@@ -471,25 +466,16 @@ where
                             format_health_factor(position.health_factor)
                         );
 
-                        // Only send liquidation opportunity if:
-                        // 1. Database save was successful
-                        // 2. User is actually liquidatable (HF < 1.0)
-                        // 3. User has debt to liquidate
-                        let liquidation_threshold = U256::from(LIQUIDATION_THRESHOLD);
-                        if database_save_successful 
-                            && position.health_factor < liquidation_threshold
-                            && position.total_debt_base > U256::ZERO
+                        // Store in database
+                        if let Err(e) =
+                            crate::database::save_user_position(&db_pool, &position).await
                         {
-                            info!("🎯 Sending liquidation opportunity for user: {:?} (HF: {})", user, format_health_factor(position.health_factor));
-                            if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(*user)) {
-                                warn!("Failed to send liquidation opportunity: {}", e);
-                            }
-                        } else if !database_save_successful {
-                            warn!("Skipping liquidation opportunity for user {:?} due to database save failure", user);
-                        } else if position.health_factor >= liquidation_threshold {
-                            debug!("User {:?} is at-risk but not liquidatable yet (HF: {})", user, format_health_factor(position.health_factor));
-                        } else if position.total_debt_base == U256::ZERO {
-                            debug!("User {:?} has no debt to liquidate", user);
+                            error!("Failed to store user position: {}", e);
+                        }
+
+                        // Send to liquidation opportunity channel
+                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(*user)) {
+                            warn!("Failed to send liquidation opportunity: {}", e);
                         }
                     }
 
@@ -497,7 +483,7 @@ where
                     sleep(Duration::from_millis(50)).await;
                 }
                 Err(e) => {
-                    debug!("Failed to check health for user {:?}: {}", user, e);
+                    error!("Failed to check user health for {:?}: {}", user, e);
                     // Continue with next user rather than failing completely
                 }
             }

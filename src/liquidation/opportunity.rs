@@ -128,44 +128,18 @@ where
     )
     .await?;
 
-    // Get user position from database, or fetch from blockchain if not found
+    // Get user position from database
     let user_position = match get_user_position_from_db(db_pool, user).await {
         Ok(Some(position)) => position,
         Ok(None) => {
-            warn!("User position not found in database: {:?}. Fetching from blockchain...", user);
-            
-            // Fetch user position from blockchain
-            match crate::monitoring::scanner::check_user_health(&provider, *pool_contract.address(), user, 3).await {
-                Ok(position) => {
-                    info!("✅ Fetched user position from blockchain: {:?}", user);
-                    
-                    // Save to database for future use
-                    if let Err(e) = crate::database::save_user_position(db_pool, &position).await {
-                        warn!("Failed to save user position to database: {}", e);
-                    } else {
-                        info!("💾 Saved user position to database: {:?}", user);
-                    }
-                    
-                    position
-                }
-                Err(e) => {
-                    error!("Failed to fetch user position from blockchain for {:?}: {}", user, e);
-                    return Ok(());
-                }
-            }
+            warn!("User position not found in database: {:?}", user);
+            return Ok(());
         }
         Err(e) => {
             error!("Failed to get user position: {}", e);
             return Err(e);
         }
     };
-
-    // Verify user is actually liquidatable (health factor < 1.0)
-    let liquidation_threshold = U256::from(1000000000000000000u64); // 1.0 * 1e18
-    if user_position.health_factor >= liquidation_threshold {
-        info!("❌ User {:?} is no longer liquidatable (HF: {} >= 1.0). Skipping.", user, user_position.health_factor);
-        return Ok(());
-    }
 
     // Initialize asset configurations
     let asset_configs = assets::init_base_mainnet_assets();
