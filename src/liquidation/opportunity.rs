@@ -130,9 +130,26 @@ where
 
     // Get user position from database
     let user_position = match get_user_position_from_db(db_pool, user).await {
-        Ok(Some(position)) => position,
+        Ok(Some(position)) => {
+            debug!("✅ Found user position in database for liquidation opportunity");
+            position
+        },
         Ok(None) => {
             warn!("User position not found in database: {:?}", user);
+            
+            // Debug: Check how many total users are in the database
+            match sqlx::query!("SELECT COUNT(*) as count FROM user_positions")
+                .fetch_one(db_pool)
+                .await 
+            {
+                Ok(row) => {
+                    warn!("📊 Total users in database: {}", row.count);
+                }
+                Err(e) => {
+                    error!("Failed to count database users: {}", e);
+                }
+            }
+            
             return Ok(());
         }
         Err(e) => {
@@ -297,12 +314,12 @@ async fn get_user_position_from_db(
     db_pool: &Pool<Sqlite>,
     user: Address,
 ) -> Result<Option<UserPosition>> {
-    // Use checksummed hex representation to match database storage format (address.to_string() produces checksummed)
     let user_str = user.to_string();
     
     debug!("🔍 Looking up user in database: {} (formatted as: {})", user, user_str);
 
-    let row = sqlx::query!("SELECT * FROM user_positions WHERE address = ?", user_str)
+    // Try case-insensitive lookup to handle any format mismatches
+    let row = sqlx::query!("SELECT * FROM user_positions WHERE LOWER(address) = LOWER(?)", user_str)
         .fetch_optional(db_pool)
         .await?;
 
