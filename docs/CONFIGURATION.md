@@ -1,21 +1,21 @@
-# Configuration Guide - WebSocket Event Monitoring
+# Configuration Guide - Production Base Mainnet
 
-This guide covers all configuration options for the Aave v3 Liquidation Bot with WebSocket-based event monitoring capabilities.
+This guide covers all configuration options for the Aave v3 Liquidation Bot with WebSocket-based event monitoring capabilities, configured for Base mainnet production deployment.
 
 ## Environment Variables
 
 ### Network Configuration
 
 ```bash
-# Base Sepolia Testnet RPC URL (HTTP)
-RPC_URL=https://sepolia.base.org
+# Base Mainnet RPC URL (HTTP) - Primary configuration
+RPC_URL=https://mainnet.base.org
 
 # WebSocket URL for real-time event monitoring (automatically derived if not set)
-WS_URL=wss://sepolia.base.org
+WS_URL=wss://mainnet.base.org
 
-# Base Mainnet alternatives:
-# RPC_URL=https://mainnet.base.org
-# WS_URL=wss://mainnet.base.org
+# Alternative high-performance RPC providers for production:
+# RPC_URL=https://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+# WS_URL=wss://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
 ```
 
 **Note**: If `WS_URL` is not specified, the bot will automatically convert the HTTP URL to WebSocket by replacing `http://` with `ws://` and `https://` with `wss://`.
@@ -85,15 +85,16 @@ RUST_LOG=trace
 
 ## Configuration Examples
 
-### Development Setup (Base Sepolia)
+### Development/Testing Setup (Base Mainnet with Conservative Settings)
 
 ```bash
-RPC_URL=https://sepolia.base.org
-PRIVATE_KEY=your_test_private_key
-LIQUIDATOR_CONTRACT=0x4818d1cb788C733Ae366D6d1D463EB48A0544528
+RPC_URL=https://mainnet.base.org
+PRIVATE_KEY=your_private_key
+LIQUIDATOR_CONTRACT=0xYourDeployedContractAddress
 TARGET_USER=0x1234567890123456789012345678901234567890
 DATABASE_URL=sqlite:liquidation_bot.db
-HEALTH_FACTOR_THRESHOLD=1200000000000000000
+HEALTH_FACTOR_THRESHOLD=1200000000000000000  # Conservative 1.2 threshold
+MIN_PROFIT_THRESHOLD=5000000000000000000     # Higher minimum (5 ETH)
 RUST_LOG=debug
 ```
 
@@ -114,16 +115,19 @@ RUST_LOG=info
 
 ## Network-Specific Information
 
-### Base Sepolia Testnet
+### Base Mainnet (Production)
+- **Chain ID**: 8453
+- **Aave Pool**: `0xA238Dd80C259a72e81d7e4664a9801593F98d1c5`
+- **Block Time**: ~2 seconds
+- **Explorer**: https://basescan.org/
+- **Supported Assets**: WETH, USDC, cbBTC, USDbC
+
+### Base Sepolia Testnet (Development Only)
 - **Chain ID**: 84532
 - **Aave Pool**: `0xA37D7E3d3CaD89b44f9a08A96fE01a9F39Bd7794`
 - **Block Time**: ~2 seconds
 - **Test Liquidator**: `0x4818d1cb788C733Ae366D6d1D463EB48A0544528`
-
-### Base Mainnet  
-- **Chain ID**: 8453
-- **Aave Pool**: `0xA238Dd80C259a72e81d7e4664a9801593F98d1c5`
-- **Block Time**: ~2 seconds
+- **Note**: Testnet configuration deprecated - use mainnet for production
 
 ## WebSocket Event Monitoring Features
 
