@@ -18,6 +18,7 @@ pub async fn start_event_monitoring<P>(
     _provider: Arc<P>,
     ws_provider: Arc<dyn Provider>,
     ws_url: &str,
+    pool_address: Address,
     event_tx: mpsc::UnboundedSender<BotEvent>,
 ) -> Result<()>
 where
@@ -35,8 +36,6 @@ where
     }
 
     info!("🚀 Starting real-time WebSocket event monitoring...");
-
-    let pool_address: Address = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2".parse()?;
 
     // Create a general filter for all events from the Aave pool
     let pool_filter = Filter::new().address(pool_address);

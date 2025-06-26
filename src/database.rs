@@ -158,3 +158,37 @@ pub async fn get_at_risk_users(db_pool: &Pool<Sqlite>) -> Result<Vec<Address>> {
     }
     Ok(users)
 }
+
+pub async fn get_all_tracked_users(db_pool: &Pool<Sqlite>) -> Result<Vec<Address>> {
+    let rows = sqlx::query(
+        "SELECT address FROM user_positions 
+         ORDER BY last_updated DESC",
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    let mut users = Vec::new();
+    for row in rows {
+        let addr_str: String = row.get("address");
+        if let Ok(addr) = addr_str.parse() {
+            users.push(addr);
+        }
+    }
+    Ok(users)
+}
+
+pub async fn add_user_to_track(db_pool: &Pool<Sqlite>, user_address: Address) -> Result<()> {
+    // Insert a placeholder entry for this user that will be updated when we scan them
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO user_positions 
+        (address, total_collateral_base, total_debt_base, available_borrows_base, 
+         current_liquidation_threshold, ltv, health_factor, last_updated, is_at_risk)
+        VALUES (?, '0', '0', '0', '0', '0', '0', datetime('now'), FALSE)
+        "#,
+    )
+    .bind(user_address.to_string())
+    .execute(db_pool)
+    .await?;
+    Ok(())
+}

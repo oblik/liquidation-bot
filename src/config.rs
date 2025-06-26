@@ -8,6 +8,7 @@ pub struct BotConfig {
     pub rpc_url: String,
     pub ws_url: String,
     pub private_key: String,
+    pub pool_address: Address,
     pub liquidator_contract: Option<Address>,
     pub min_profit_threshold: U256,
     pub gas_price_multiplier: u64,
@@ -34,6 +35,33 @@ impl BotConfig {
 
         let private_key = std::env::var("PRIVATE_KEY")
             .map_err(|_| eyre::eyre!("PRIVATE_KEY environment variable not set"))?;
+
+        // Configure pool address with intelligent defaults
+        let pool_address = match std::env::var("POOL_ADDRESS") {
+            Ok(addr_str) => match addr_str.parse::<Address>() {
+                Ok(addr) => addr,
+                Err(e) => {
+                    return Err(eyre::eyre!(
+                        "Invalid POOL_ADDRESS '{}': {}",
+                        addr_str, e
+                    ));
+                }
+            },
+            Err(_) => {
+                // Auto-detect pool address based on RPC URL
+                if rpc_url.contains("sepolia") || rpc_url.contains("84532") {
+                    // Base Sepolia testnet
+                    "0xA37D7E3d3CaD89b44f9a08A96fE01a9F39Bd7794".parse()?
+                } else if rpc_url.contains("base") || rpc_url.contains("8453") {
+                    // Base mainnet
+                    "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5".parse()?
+                } else {
+                    // Default to Base mainnet
+                    warn!("Could not auto-detect network from RPC URL. Defaulting to Base mainnet pool address.");
+                    "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5".parse()?
+                }
+            }
+        };
 
         let liquidator_contract = match std::env::var("LIQUIDATOR_CONTRACT") {
             Ok(addr_str) => match addr_str.parse::<Address>() {
@@ -133,6 +161,7 @@ impl BotConfig {
             rpc_url,
             ws_url,
             private_key,
+            pool_address,
             liquidator_contract,
             min_profit_threshold,
             gas_price_multiplier,

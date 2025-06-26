@@ -5,6 +5,7 @@ pub mod events;
 pub mod liquidation;
 pub mod models;
 pub mod monitoring;
+pub mod bootstrap;
 
 pub use bot::LiquidationBot;
 pub use config::BotConfig;

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::bootstrap::{self, BootstrapConfig};
 use crate::config::BotConfig;
 use crate::database;
 use crate::events::BotEvent;
@@ -60,9 +61,8 @@ where
         let artifact: HardhatArtifact = serde_json::from_str(artifact_str)?;
         let interface = Interface::new(artifact.abi);
 
-        // Aave V3 Pool address on Base  mainnet
-        let pool_addr: Address = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2".parse()?;
-        let pool_contract = interface.connect(pool_addr, provider.clone());
+        // Use configured pool address
+        let pool_contract = interface.connect(config.pool_address, provider.clone());
 
         // Try to create WebSocket provider for event monitoring
         let ws_provider = match websocket::try_connect_websocket(&config.ws_url).await {
@@ -291,12 +291,25 @@ where
     pub async fn run(&self) -> Result<()> {
         info!("🚀 Starting Aave v3 Liquidation Bot with Real-Time WebSocket Monitoring");
 
+        // Check if we need to bootstrap (discover existing users)
+        let existing_users = database::get_all_tracked_users(&self.db_pool).await?;
+        if existing_users.is_empty() {
+            info!("🔄 No users found in database - starting bootstrap process...");
+            if let Err(e) = self.bootstrap_users().await {
+                error!("Bootstrap failed: {}", e);
+                warn!("Continuing without bootstrap - bot will discover users through events");
+            }
+        } else {
+            info!("📊 Found {} existing users in database - skipping bootstrap", existing_users.len());
+        }
+
         // Start all monitoring services
         tokio::try_join!(
             websocket::start_event_monitoring(
                 self.provider.clone(),
                 self.ws_provider.clone(),
                 &self.config.ws_url,
+                self.config.pool_address,
                 self.event_tx.clone(),
             ),
             oracle::start_oracle_monitoring(
@@ -310,7 +323,7 @@ where
             self.run_event_processor(),
             scanner::run_periodic_scan(
                 self.provider.clone(),
-                "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2".parse()?,
+                *self.pool_contract.address(),
                 self.db_pool.clone(),
                 self.event_tx.clone(),
                 self.config.clone(),
@@ -318,6 +331,67 @@ where
             scanner::start_status_reporter(self.db_pool.clone(), self.user_positions.clone(),),
         )?;
 
+        Ok(())
+    }
+
+    async fn bootstrap_users(&self) -> Result<()> {
+        info!("🔄 Starting user discovery bootstrap...");
+
+        // Create bootstrap configuration
+        let bootstrap_config = BootstrapConfig {
+            blocks_to_scan: 100000,     // Scan more blocks for better coverage
+            batch_size: 2000,           // Larger batches for faster scanning
+            rate_limit_delay_ms: 1000,  // 1 second delay to be conservative
+            max_users_to_discover: 500, // Discover up to 500 users initially
+        };
+
+        // First, discover users from historical events
+        let discovered_users = bootstrap::discover_users_from_events(
+            self.provider.clone(),
+            *self.pool_contract.address(),
+            &self.db_pool,
+            bootstrap_config,
+        )
+        .await?;
+
+        if discovered_users.is_empty() {
+            warn!("🔍 No users discovered from historical events");
+            return Ok(());
+        }
+
+        info!("👥 Discovered {} users, now checking their current positions...", discovered_users.len());
+
+        // Then, check their current positions and store active ones
+        let positions = bootstrap::bootstrap_user_positions(
+            self.provider.clone(),
+            &self.pool_contract,
+            &self.db_pool,
+            discovered_users,
+        )
+        .await?;
+
+        // Update the in-memory tracking for users with positions
+        for position in positions {
+            self.user_positions.insert(position.address, position.clone());
+            
+            // Add users to collateral tracking if they have collateral
+            if position.total_collateral_base > U256::ZERO {
+                // For now, assume WETH collateral (we could enhance this by checking user configuration)
+                match "0x4200000000000000000000000000000000000006".parse::<Address>() {
+                    Ok(weth_address) => {
+                        self.users_by_collateral
+                            .entry(weth_address)
+                            .or_insert_with(HashSet::new)
+                            .insert(position.address);
+                    }
+                    Err(e) => {
+                        error!("Failed to parse WETH address for collateral tracking: {}", e);
+                    }
+                }
+            }
+        }
+
+        info!("✅ Bootstrap completed! Bot is now monitoring {} users", self.user_positions.len());
         Ok(())
     }
 }
