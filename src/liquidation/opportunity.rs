@@ -142,7 +142,7 @@ where
     };
 
     // Initialize asset configurations
-    let asset_configs = assets::init_base_sepolia_assets();
+    let asset_configs = assets::init_base_mainnet_assets();
 
     // Fetch user's actual collateral and debt assets from the blockchain
     let (user_collateral_assets, user_debt_assets) =

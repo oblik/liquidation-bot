@@ -3,7 +3,7 @@ use alloy_primitives::Address;
 use std::collections::HashMap;
 
 /// Initialize asset configurations for Base mainnet
-pub fn init_base_sepolia_assets() -> HashMap<Address, LiquidationAssetConfig> {
+pub fn init_base_mainnet_assets() -> HashMap<Address, LiquidationAssetConfig> {
     let mut assets = HashMap::new();
 
     // WETH (Wrapped Ether) - Base mainnet
