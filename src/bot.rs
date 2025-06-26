@@ -91,7 +91,7 @@ where
         let asset_configs = oracle::init_asset_configs();
 
         // Initialize liquidation asset configurations
-        let liquidation_assets = liquidation::init_base_sepolia_assets();
+        let liquidation_assets = liquidation::init_base_mainnet_assets();
 
         // Get liquidator contract address from config
         let liquidator_contract_address = config.liquidator_contract;
