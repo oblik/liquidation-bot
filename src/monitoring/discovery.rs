@@ -47,38 +47,59 @@ where
         ("Withdraw", Withdraw::SIGNATURE_HASH),
     ];
 
+    // Scan in chunks to avoid RPC provider limits (Alchemy limits to 500 blocks)
+    let chunk_size = 400u64;
+    let total_blocks = current_block - from_block;
+    let num_chunks = (total_blocks + chunk_size - 1) / chunk_size; // Round up
+
     for (event_name, signature_hash) in event_types {
-        info!("🔎 Scanning for {} events...", event_name);
+        info!("🔎 Scanning for {} events in {} chunks...", event_name, num_chunks);
 
-        let filter = Filter::new()
-            .address(pool_address)
-            .event_signature(signature_hash)
-            .from_block(BlockNumberOrTag::Number(from_block))
-            .to_block(BlockNumberOrTag::Number(current_block));
+        for chunk_idx in 0..num_chunks {
+            let chunk_from = from_block + (chunk_idx * chunk_size);
+            let chunk_to = std::cmp::min(chunk_from + chunk_size - 1, current_block);
 
-        match provider.get_logs(&filter).await {
-            Ok(logs) => {
-                info!("Found {} {} events", logs.len(), event_name);
-                
-                for log in logs {
-                    // Extract user address from log topics
-                    if let Some(user_address) = extract_user_address_from_log(&log, event_name) {
-                        discovered_users.insert(user_address);
-                        
-                        // Stop if we've discovered enough users
-                        if discovered_users.len() >= MAX_USERS_TO_PROCESS {
-                            warn!(
-                                "Reached maximum user discovery limit ({}), stopping scan",
-                                MAX_USERS_TO_PROCESS
-                            );
-                            break;
+            let filter = Filter::new()
+                .address(pool_address)
+                .event_signature(signature_hash)
+                .from_block(BlockNumberOrTag::Number(chunk_from))
+                .to_block(BlockNumberOrTag::Number(chunk_to));
+
+            match provider.get_logs(&filter).await {
+                Ok(logs) => {
+                    if !logs.is_empty() {
+                        info!("Found {} {} events in chunk {}/{} (blocks {}-{})", 
+                              logs.len(), event_name, chunk_idx + 1, num_chunks, chunk_from, chunk_to);
+                    }
+                    
+                    for log in logs {
+                        // Extract user address from log topics
+                        if let Some(user_address) = extract_user_address_from_log(&log, event_name) {
+                            discovered_users.insert(user_address);
+                            
+                            // Stop if we've discovered enough users
+                            if discovered_users.len() >= MAX_USERS_TO_PROCESS {
+                                warn!(
+                                    "Reached maximum user discovery limit ({}), stopping scan",
+                                    MAX_USERS_TO_PROCESS
+                                );
+                                break;
+                            }
                         }
                     }
                 }
+                Err(e) => {
+                    error!("Failed to get {} events for chunk {}/{}: {}", event_name, chunk_idx + 1, num_chunks, e);
+                    // Continue with next chunk rather than failing completely
+                    continue;
+                }
             }
-            Err(e) => {
-                error!("Failed to get {} events: {}", event_name, e);
-                continue;
+
+            // Brief delay between chunks to avoid rate limiting
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+            if discovered_users.len() >= MAX_USERS_TO_PROCESS {
+                break;
             }
         }
 
