@@ -8,13 +8,14 @@ This is an Aave v3 liquidation bot for the Base network, written in Rust using t
 - [x] **Smart Contract (`AaveLiquidator.sol`)**: Deployed and ready for flash loan liquidations.
 - [x] **Rust Bot Foundation**: Basic health factor checking and configuration.
 
-**Phase 2: Event Monitoring (COMPLETED)**
+**Phase 2: Real-Time Monitoring (COMPLETED)**
 - [x] **WebSocket Subscriptions**: Real-time monitoring of all Aave Pool events.
 - [x] **Dynamic User Discovery**: Automatically detects and monitors all active Aave users.
 - [x] **Database Integration**: Persists user positions and bot events to a database (SQLite/PostgreSQL).
 - [x] **Oracle Price Monitoring**: Directly monitor Chainlink price feeds to react instantly to market volatility (core implementation).
 - [x] **Profitability Calculation**: Complete implementation with liquidation bonus, flash loan fees, gas costs, and slippage estimation.
 - [x] **Liquidation Execution**: Full smart contract integration with transaction management and confirmation tracking.
+- [x] **Price Oracle Reactivity (Partial)**: Oracle module emits price updates, groundwork laid for reactive liquidation checks.
 
 ## 🔄 Next Steps
 
@@ -23,10 +24,13 @@ This is an Aave v3 liquidation bot for the Base network, written in Rust using t
 - ✅ **Complete Liquidation Execution** via smart contract integration  
 - ✅ **Multi-Asset Support** for WETH, USDC, cbETH liquidation strategies
 
-The next priorities from the [roadmap](docs/ROADMAP.md) are **Phase 3: Production Hardening & Optimization**:
+Now entering **Phase 3: Production Hardening & Optimization** as outlined in the [roadmap](docs/ROADMAP.md):
+
 - **Advanced Error Handling & Retries**
-- **Dynamic Gas Price Strategy** 
+- **Dynamic Gas Price Strategy**
 - **Enhanced Multi-Asset Logic**
+- **Price-Triggered Reassessment**
+- **Configurable Asset Indexing**
 - **Testing & Simulation Framework**
 - **Containerization & Deployment**
 
@@ -175,12 +179,14 @@ The tests demonstrate the **real profitability logic** that considers:
 - **Alloy Integration**: Modern Ethereum library with type-safe contract bindings.
 - **Structured Logging**: Comprehensive `tracing` for debugging and monitoring.
 - **Advanced Configuration**: Detailed environment-based setup, documented in `docs/CONFIGURATION.md`.
+- **Oracle Price Monitoring**: Integrated Chainlink feed tracking with event-based hooks for future user reassessment on price changes.
 
 ## Key Advantages
 
 1. **Base Network Optimized**: Leverages L2Pool for 60%+ gas savings.
 2. **Modern Tech Stack**: Uses latest Rust and Ethereum tooling (Alloy, Tokio).
 3. **Real-Time & Proactive**: Instead of just polling, the bot reacts to on-chain events the moment they happen.
+4. **Resilience-Oriented Design**: Includes fallback and concurrency safeguards with planned improvements for deeper asset coverage and price sensitivity.
 
 ## Documentation
 
@@ -211,4 +217,3 @@ INFO liquidation_bot: Scanning 1 at-risk users...
 WARN liquidation_bot: ⚠️  User 0xdb3e... is at risk. Health Factor: 1.093
 INFO liquidation_bot: 📊 Status Report: 3 positions tracked, 1 at risk, 0 liquidatable
 ```
-

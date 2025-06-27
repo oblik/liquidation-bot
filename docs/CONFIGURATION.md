@@ -57,8 +57,8 @@ The bot automatically creates the following tables:
 ### Bot Behavior Settings
 
 ```bash
-# Minimum profit threshold in wei (default: 5 ETH)
-MIN_PROFIT_THRESHOLD=5000000000000000000
+# Minimum profit threshold in wei (default: 0.01 ETH)
+MIN_PROFIT_THRESHOLD=10000000000000000
 
 # Gas price multiplier for competitive bidding (default: 2x)
 GAS_PRICE_MULTIPLIER=2
@@ -105,7 +105,7 @@ WS_URL=wss://mainnet.base.org
 PRIVATE_KEY=your_production_private_key
 LIQUIDATOR_CONTRACT=your_mainnet_contract_address
 DATABASE_URL=postgresql://user:pass@localhost/liquidation_bot
-MIN_PROFIT_THRESHOLD=1000000000000000000
+MIN_PROFIT_THRESHOLD=10000000000000000
 GAS_PRICE_MULTIPLIER=3
 HEALTH_FACTOR_THRESHOLD=1100000000000000000
 MONITORING_INTERVAL_SECS=3
@@ -136,13 +136,15 @@ The bot now monitors the following Aave events in real-time:
 - **Withdraw**: When users remove collateral
 - **LiquidationCall**: When liquidations occur
 
+- **Oracle Price Monitoring (Partial)**: Tracks Chainlink price feeds. Hooks for user reassessment on price changes are partially implemented.
+
 ### Event Processing Pipeline
 1. **WebSocket Subscription** → Real-time event detection
 2. **Event Parser** → Extract affected user addresses
 3. **Position Update** → Refresh user health factors
 4. **Database Storage** → Persist position data
 5. **Opportunity Detection** → Identify liquidatable positions
-6. **Alert System** → Log and notify of opportunities
+6. **Alert System (Planned)** → Currently logs opportunities internally. External alerts not yet implemented.
 
 ## Performance Tuning
 
@@ -178,6 +180,7 @@ CREATE TABLE user_positions (
     is_at_risk BOOLEAN NOT NULL DEFAULT FALSE
 );
 ```
+-- Note: Entries for users with zero debt are retained indefinitely. Future updates may add automatic pruning.
 
 ### liquidation_events  
 ```sql
