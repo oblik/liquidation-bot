@@ -138,10 +138,11 @@ where
                         user_address,
                         format_health_factor(position.health_factor)
                     );
-
-                    // Send event for immediate processing
-                    let _ = event_tx.send(BotEvent::UserPositionChanged(user_address));
                 }
+
+                // Send event for ALL users to populate collateral mapping and trigger processing
+                // This ensures users_by_collateral mapping is populated for everyone
+                let _ = event_tx.send(BotEvent::UserPositionChanged(user_address));
 
                 // Brief delay to avoid overwhelming the RPC
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;

@@ -237,6 +237,130 @@ where
     Ok(position)
 }
 
+/// Helper function to get user's collateral assets from the blockchain
+async fn get_user_collateral_assets<P>(
+    pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
+    user: Address,
+) -> Result<Vec<Address>>
+where
+    P: Provider,
+{
+    debug!("Fetching user collateral assets for: {:?}", user);
+
+    // Get user configuration bitfield
+    let user_config_args = [alloy_dyn_abi::DynSolValue::Address(user)];
+    let user_config_call = pool_contract.function("getUserConfiguration", &user_config_args)?;
+    let user_config_result = user_config_call.call().await?;
+
+    // Validate that we have at least one element in the result
+    if user_config_result.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Extract the configuration data from the tuple
+    let config_data = if let alloy_dyn_abi::DynSolValue::Tuple(tuple) = &user_config_result[0] {
+        if tuple.is_empty() {
+            return Ok(Vec::new());
+        }
+        if let alloy_dyn_abi::DynSolValue::Uint(data, _) = &tuple[0] {
+            *data
+        } else {
+            return Ok(Vec::new());
+        }
+    } else {
+        return Ok(Vec::new());
+    };
+
+    // Get reserves list
+    let reserves_call = pool_contract.function("getReservesList", &[])?;
+    let reserves_result = reserves_call.call().await?;
+
+    // Validate that we have at least one element in the result
+    if reserves_result.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Extract reserves array
+    let reserves: Vec<Address> =
+        if let alloy_dyn_abi::DynSolValue::Array(array) = &reserves_result[0] {
+            array
+                .iter()
+                .filter_map(|value| {
+                    if let alloy_dyn_abi::DynSolValue::Address(addr) = value {
+                        Some(*addr)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            return Ok(Vec::new());
+        };
+
+    debug!("Found {} reserves in the pool", reserves.len());
+
+    // Decode user configuration bitfield to find collateral assets
+    let mut user_collateral_assets = Vec::new();
+
+    // Each asset has 2 bits in the configuration:
+    // - Bit 2*i: whether the asset is used as collateral
+    // - Bit 2*i+1: whether the asset is borrowed
+    for (i, &reserve_address) in reserves.iter().enumerate() {
+        let collateral_bit = (config_data >> (2 * i)) & U256::from(1u8);
+
+        if collateral_bit != U256::ZERO {
+            user_collateral_assets.push(reserve_address);
+            debug!("User has {} as collateral", reserve_address);
+        }
+    }
+
+    debug!(
+        "User {} has {} collateral assets",
+        user,
+        user_collateral_assets.len()
+    );
+
+    Ok(user_collateral_assets)
+}
+
+/// Update the users_by_collateral mapping for a specific user
+async fn update_user_collateral_mapping<P>(
+    pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
+    user: Address,
+    users_by_collateral: &Arc<DashMap<Address, HashSet<Address>>>,
+) -> Result<()>
+where
+    P: Provider,
+{
+    // Get user's collateral assets
+    let collateral_assets = match get_user_collateral_assets(pool_contract, user).await {
+        Ok(assets) => assets,
+        Err(e) => {
+            debug!("Failed to get collateral assets for user {:?}: {}", user, e);
+            return Ok(()); // Don't fail the entire operation for one user
+        }
+    };
+
+    // Remove user from all existing collateral mappings first
+    for mut entry in users_by_collateral.iter_mut() {
+        entry.remove(&user);
+    }
+
+    // Add user to correct collateral asset mappings
+    for asset_address in collateral_assets {
+        users_by_collateral
+            .entry(asset_address)
+            .or_insert_with(HashSet::new)
+            .insert(user);
+        debug!(
+            "Mapped user {:?} to collateral asset {}",
+            user, asset_address
+        );
+    }
+
+    Ok(())
+}
+
 pub async fn update_user_position<P>(
     provider: Arc<P>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
@@ -286,26 +410,44 @@ where
                     }
                 };
 
-            // TODO: Populate users_by_collateral mapping by calling getUserConfiguration
+            // Populate users_by_collateral mapping by calling getUserConfiguration
             // and getReservesList to determine which assets this user has as collateral
-            // For now, we'll add this user to WETH collateral as a fallback since that's what we monitor
             if let Some(users_by_collateral) = &users_by_collateral {
                 if position.total_collateral_base > U256::ZERO {
-                    // Base mainnet WETH address
-                    match "0x4200000000000000000000000000000000000006".parse::<Address>() {
-                        Ok(weth_address) => {
-                            users_by_collateral
-                                .entry(weth_address)
-                                .or_insert_with(HashSet::new)
-                                .insert(user);
-                            debug!("Added user {:?} to WETH collateral tracking", user);
+                    // Update the collateral mapping for this user
+                    if let Err(e) =
+                        update_user_collateral_mapping(pool_contract, user, users_by_collateral)
+                            .await
+                    {
+                        error!(
+                            "Failed to update collateral mapping for user {:?}: {}",
+                            user, e
+                        );
+
+                        // Fallback to WETH mapping for Base mainnet
+                        match "0x4200000000000000000000000000000000000006".parse::<Address>() {
+                            Ok(weth_address) => {
+                                users_by_collateral
+                                    .entry(weth_address)
+                                    .or_insert_with(HashSet::new)
+                                    .insert(user);
+                                debug!(
+                                    "Added user {:?} to WETH collateral tracking (fallback)",
+                                    user
+                                );
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Failed to parse WETH address for collateral tracking: {}",
+                                    e
+                                );
+                            }
                         }
-                        Err(e) => {
-                            error!(
-                                "Failed to parse WETH address for collateral tracking: {}",
-                                e
-                            );
-                        }
+                    } else {
+                        debug!(
+                            "✅ Successfully updated collateral mapping for user {:?}",
+                            user
+                        );
                     }
                 }
             }
