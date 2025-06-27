@@ -170,9 +170,9 @@ where
 
     /// Get asset ID for L2Pool encoding - uses direct address comparison for reliability
     fn get_asset_id(&self, asset_address: Address) -> Result<u16> {
-        // Use direct address comparison for Base mainnet assets
+        // Use direct address comparison instead of fragile string matching
         let weth_addr: Address = "0x4200000000000000000000000000000000000006".parse()?;
-        let usdc_addr: Address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".parse()?; // Base mainnet USDC
+        let usdc_addr: Address = "0x036CbD53842c5426634e7929541eC2318f3dCF7e".parse()?;
         let cbeth_addr: Address = "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22".parse()?;
 
         if asset_address == weth_addr {
@@ -200,9 +200,9 @@ where
             if let Some(addr) = pool_address.as_address() {
                 info!("✅ Contract pool address: {:?}", addr);
 
-                // Verify it matches expected Base mainnet pool
+                // Verify it matches expected Base Sepolia pool
                 let expected_pool: Address =
-                    "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5".parse()?;
+                    "0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b".parse()?;
                 if addr == expected_pool {
                     info!("✅ Pool address verification successful");
                 } else {

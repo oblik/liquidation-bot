@@ -29,16 +29,16 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
      *   - Pool: 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5
      *   - AddressesProvider: 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e
      *   - SwapRouter: 0x2626664c2603336E57B271c5C0b26F421741e481
-     *
+     * 
      * Base Sepolia Testnet:
-     *   - Pool: 0xA37D7E3d3CaD89b44f9a08A96fE01a9F39Bd7794
+     *   - Pool: 0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b
      *   - AddressesProvider: 0x0D8176C0e8965F2730c4C1aA5aAE816fE4b7a802
      *   - SwapRouter: 0x8357227D4eDd91C4f85615C9cC5761899CD4B068
      */
-
+    
     // Maximum slippage tolerance (5% in basis points)
     uint256 public constant MAX_SLIPPAGE = 500;
-
+    
     // Minimum profit threshold in USD (scaled by 1e8 to match oracle precision)
     uint256 public minProfitThreshold = 5 * 1e8; // $5
 
@@ -73,12 +73,9 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         address _swapRouter
     ) Ownable() {
         require(_poolAddress != address(0), "Invalid pool address");
-        require(
-            _addressesProviderAddress != address(0),
-            "Invalid addresses provider"
-        );
+        require(_addressesProviderAddress != address(0), "Invalid addresses provider");
         require(_swapRouter != address(0), "Invalid swap router address");
-
+        
         POOL_ADDRESS = _poolAddress;
         ADDRESSES_PROVIDER_ADDRESS = _addressesProviderAddress;
         SWAP_ROUTER = _swapRouter;
@@ -89,12 +86,8 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         return IPool(POOL_ADDRESS);
     }
 
-    // Required by IFlashLoanReceiver
-    function ADDRESSES_PROVIDER()
-        external
-        view
-        returns (IPoolAddressesProvider)
-    {
+    // Required by IFlashLoanReceiver  
+    function ADDRESSES_PROVIDER() external view returns (IPoolAddressesProvider) {
         return IPoolAddressesProvider(ADDRESSES_PROVIDER_ADDRESS);
     }
 
@@ -135,8 +128,7 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         uint256 actualDebtToCover = debtToCover;
         if (debtToCover == type(uint256).max) {
             // Get user's total debt in the specific asset
-            (, uint256 totalDebtBase, , , , ) = IPool(POOL_ADDRESS)
-                .getUserAccountData(user);
+            (, uint256 totalDebtBase, , , , ) = IPool(POOL_ADDRESS).getUserAccountData(user);
             // This is a simplified approach - in practice, you'd want to get the specific asset debt
             actualDebtToCover = totalDebtBase / 2; // Conservative estimate for 50% liquidation
         }
@@ -144,10 +136,10 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         // Request flash loan
         address[] memory assets = new address[](1);
         assets[0] = debtAsset;
-
+        
         uint256[] memory amounts = new uint256[](1);
         amounts[0] = actualDebtToCover;
-
+        
         uint256[] memory modes = new uint256[](1);
         modes[0] = 0; // No debt, pay back immediately
 
@@ -181,11 +173,8 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         require(initiator == address(this), "Invalid initiator");
 
         // Decode parameters
-        LiquidationParams memory liquidationParams = abi.decode(
-            params,
-            (LiquidationParams)
-        );
-
+        LiquidationParams memory liquidationParams = abi.decode(params, (LiquidationParams));
+        
         address debtAsset = assets[0];
         uint256 amount = amounts[0];
         uint256 premium = premiums[0];
@@ -197,15 +186,11 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         _executeLiquidation(liquidationParams, amount);
 
         // Calculate collateral received
-        uint256 collateralBalance = IERC20(liquidationParams.collateralAsset)
-            .balanceOf(address(this));
+        uint256 collateralBalance = IERC20(liquidationParams.collateralAsset).balanceOf(address(this));
 
         // Swap collateral to debt asset if they're different
         uint256 debtAssetBalance = IERC20(debtAsset).balanceOf(address(this));
-        if (
-            liquidationParams.collateralAsset != debtAsset &&
-            collateralBalance > 0
-        ) {
+        if (liquidationParams.collateralAsset != debtAsset && collateralBalance > 0) {
             debtAssetBalance += _swapCollateralToDebt(
                 liquidationParams.collateralAsset,
                 debtAsset,
@@ -215,19 +200,16 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
 
         // Calculate total amount to repay (principal + premium)
         uint256 totalRepayAmount = amount + premium;
-
+        
         // Ensure we have enough to repay the flash loan
-        require(
-            debtAssetBalance >= totalRepayAmount,
-            "Insufficient funds to repay flash loan"
-        );
+        require(debtAssetBalance >= totalRepayAmount, "Insufficient funds to repay flash loan");
 
         // Approve Pool to collect the repayment
         IERC20(debtAsset).safeApprove(POOL_ADDRESS, totalRepayAmount);
 
         // Calculate and emit profit
         uint256 profit = debtAssetBalance - totalRepayAmount;
-
+        
         emit LiquidationExecuted(
             liquidationParams.user,
             liquidationParams.collateralAsset,
@@ -253,13 +235,14 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         // args1: collateralAssetId (16 bits) + debtAssetId (16 bits) + user address (160 bits)
         bytes32 args1 = bytes32(
             (uint256(params.collateralAssetId) << 240) |
-                (uint256(params.debtAssetId) << 224) |
-                uint256(uint160(params.user))
+            (uint256(params.debtAssetId) << 224) |
+            uint256(uint160(params.user))
         );
 
         // args2: debtToCover (128 bits) + receiveAToken flag (1 bit)
         bytes32 args2 = bytes32(
-            (debtToCover << 128) | (params.receiveAToken ? 1 : 0)
+            (debtToCover << 128) |
+            (params.receiveAToken ? 1 : 0)
         );
 
         // Call L2Pool liquidation function
@@ -286,21 +269,20 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         uint256 amountOutMinimum = (amountIn * (10000 - MAX_SLIPPAGE)) / 10000;
 
         // Set up swap parameters
-        ISwapRouter.ExactInputSingleParams memory swapParams = ISwapRouter
-            .ExactInputSingleParams({
-                tokenIn: collateralAsset,
-                tokenOut: debtAsset,
-                fee: 3000, // 0.3% fee tier
-                recipient: address(this),
-                deadline: block.timestamp + 300, // 5 minutes
-                amountIn: amountIn,
-                amountOutMinimum: amountOutMinimum,
-                sqrtPriceLimitX96: 0
-            });
+        ISwapRouter.ExactInputSingleParams memory swapParams = ISwapRouter.ExactInputSingleParams({
+            tokenIn: collateralAsset,
+            tokenOut: debtAsset,
+            fee: 3000, // 0.3% fee tier
+            recipient: address(this),
+            deadline: block.timestamp + 300, // 5 minutes
+            amountIn: amountIn,
+            amountOutMinimum: amountOutMinimum,
+            sqrtPriceLimitX96: 0
+        });
 
         // Execute the swap
         amountOut = ISwapRouter(SWAP_ROUTER).exactInputSingle(swapParams);
-
+        
         // Reset approval
         IERC20(collateralAsset).safeApprove(SWAP_ROUTER, 0);
     }
@@ -317,15 +299,15 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         address to
     ) external onlyOwner {
         require(to != address(0), "Invalid recipient");
-
+        
         uint256 balance = IERC20(asset).balanceOf(address(this));
         uint256 withdrawAmount = amount == 0 ? balance : amount;
-
+        
         require(withdrawAmount <= balance, "Insufficient balance");
         require(withdrawAmount > 0, "Nothing to withdraw");
 
         IERC20(asset).safeTransfer(to, withdrawAmount);
-
+        
         emit ProfitWithdrawn(asset, withdrawAmount, to);
     }
 
@@ -337,7 +319,7 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         require(to != address(0), "Invalid recipient");
         uint256 balance = address(this).balance;
         require(balance > 0, "No ETH to withdraw");
-
+        
         (bool success, ) = to.call{value: balance}("");
         require(success, "ETH transfer failed");
     }
@@ -387,4 +369,4 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
 
     // Allow contract to receive ETH
     receive() external payable {}
-}
+} 

@@ -97,12 +97,7 @@ pub async fn init_database(database_url: &str) -> Result<Pool<Sqlite>> {
 }
 
 pub async fn save_user_position(db_pool: &Pool<Sqlite>, position: &UserPosition) -> Result<()> {
-    let address_str = position.address.to_string();
-    tracing::debug!("💾 Saving user position to database: {} (stored as: {})", position.address, address_str);
-    tracing::debug!("💾 Position details: HF={}, debt={}, collateral={}, at_risk={}", 
-        position.health_factor, position.total_debt_base, position.total_collateral_base, position.is_at_risk);
-    
-    let result = sqlx::query(
+    sqlx::query(
         r#"
         INSERT OR REPLACE INTO user_positions 
         (address, total_collateral_base, total_debt_base, available_borrows_base, 
@@ -110,7 +105,7 @@ pub async fn save_user_position(db_pool: &Pool<Sqlite>, position: &UserPosition)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
-    .bind(address_str.clone())
+    .bind(position.address.to_string())
     .bind(position.total_collateral_base.to_string())
     .bind(position.total_debt_base.to_string())
     .bind(position.available_borrows_base.to_string())
@@ -121,8 +116,6 @@ pub async fn save_user_position(db_pool: &Pool<Sqlite>, position: &UserPosition)
     .bind(position.is_at_risk)
     .execute(db_pool)
     .await?;
-    
-    tracing::debug!("✅ Database save completed successfully for {} (rows affected: {})", address_str, result.rows_affected());
     Ok(())
 }
 

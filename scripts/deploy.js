@@ -16,7 +16,7 @@ async function main() {
       swapRouter: ethers.utils.getAddress("0x2626664c2603336E57B271c5C0b26F421741e481")
     },
     "base-sepolia": {
-      poolAddress: ethers.utils.getAddress("0xA37D7E3d3CaD89b44f9a08A96fE01a9F39Bd7794"),
+      poolAddress: ethers.utils.getAddress("0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b"),
       addressesProvider: ethers.utils.getAddress("0x0d8176c0e8965f2730c4c1aa5aae816fe4b7a802"),
       swapRouter: ethers.utils.getAddress("0x8357227d4edd91c4f85615c9cc5761899cd4b068")
     }
