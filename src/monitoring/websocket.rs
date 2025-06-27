@@ -1,12 +1,20 @@
 use crate::events::BotEvent;
 use alloy_primitives::Address;
 use alloy_provider::{Provider, ProviderBuilder, WsConnect};
-use alloy_rpc_types::{Filter, Log};
+use alloy_rpc_types::{Filter, Log, BlockNumberOrTag};
+use alloy_sol_types::SolEvent;
 use eyre::Result;
 use futures::StreamExt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
+use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
+
+use crate::models::{Borrow, Supply, Repay, Withdraw};
+
+// Static variable to track last processed block for polling mode
+static LAST_PROCESSED_BLOCK: AtomicU64 = AtomicU64::new(0);
 
 pub async fn try_connect_websocket(ws_url: &str) -> Result<Arc<dyn Provider>> {
     let ws_connect = WsConnect::new(ws_url.to_string());
@@ -15,7 +23,7 @@ pub async fn try_connect_websocket(ws_url: &str) -> Result<Arc<dyn Provider>> {
 }
 
 pub async fn start_event_monitoring<P>(
-    _provider: Arc<P>,
+    provider: Arc<P>,
     ws_provider: Arc<dyn Provider>,
     ws_url: &str,
     event_tx: mpsc::UnboundedSender<BotEvent>,
@@ -24,14 +32,16 @@ where
     P: Provider + 'static,
 {
     // Check if we're using WebSocket or HTTP fallback
-    // More specific check: only disable websockets if it's clearly an HTTP URL
     let using_websocket = ws_url.starts_with("wss://") || ws_url.starts_with("ws://");
 
     if !using_websocket {
         info!("Event monitoring initialized (using HTTP polling mode)");
         warn!("WebSocket event subscriptions skipped - URL does not use WebSocket protocol");
         warn!("For real-time monitoring, configure WS_URL with a proper WebSocket RPC endpoint");
-        return Ok(());
+        
+        // Instead of exiting early, start polling-based event monitoring
+        info!("🔄 Starting getLogs-based polling for continuous event discovery...");
+        return start_polling_event_monitoring(provider, event_tx).await;
     }
 
     info!("🚀 Starting real-time WebSocket event monitoring...");
@@ -65,6 +75,116 @@ where
     });
 
     info!("✅ WebSocket event subscriptions established");
+    Ok(())
+}
+
+/// Polling-based event monitoring for HTTP fallback mode
+async fn start_polling_event_monitoring<P>(
+    provider: Arc<P>,
+    event_tx: mpsc::UnboundedSender<BotEvent>,
+) -> Result<()>
+where
+    P: Provider + 'static,
+{
+    let pool_address: Address = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5".parse()?;
+
+    // Initialize last processed block to current block
+    let current_block = provider.get_block_number().await?;
+    LAST_PROCESSED_BLOCK.store(current_block, Ordering::Relaxed);
+    
+    info!("Starting polling from block: {}", current_block);
+
+    // Event signatures for key Aave events
+    let key_events = vec![
+        ("Borrow", Borrow::SIGNATURE_HASH),
+        ("Supply", Supply::SIGNATURE_HASH),
+        ("Repay", Repay::SIGNATURE_HASH),
+        ("Withdraw", Withdraw::SIGNATURE_HASH),
+    ];
+
+    // Create interval for polling (every 10 seconds to balance real-time vs rate limits)
+    let mut poll_interval = interval(Duration::from_secs(10));
+
+    tokio::spawn(async move {
+        info!("🔄 Polling loop started for event discovery");
+        
+        loop {
+            poll_interval.tick().await;
+            
+            if let Err(e) = poll_for_events(&provider, pool_address, &key_events, &event_tx).await {
+                error!("Error during event polling: {}", e);
+                // Continue polling even if one round fails
+            }
+        }
+    });
+
+    info!("✅ Polling-based event monitoring established");
+    Ok(())
+}
+
+/// Poll for new events since last processed block
+async fn poll_for_events<P>(
+    provider: &Arc<P>,
+    pool_address: Address,
+    key_events: &[(&str, alloy_primitives::FixedBytes<32>)],
+    event_tx: &mpsc::UnboundedSender<BotEvent>,
+) -> Result<()>
+where
+    P: Provider,
+{
+    let current_block = provider.get_block_number().await?;
+    let last_processed = LAST_PROCESSED_BLOCK.load(Ordering::Relaxed);
+    
+    // Skip if no new blocks
+    if current_block <= last_processed {
+        return Ok(());
+    }
+
+    let from_block = last_processed + 1;
+    let blocks_to_process = current_block - last_processed;
+    
+    debug!("Polling blocks {} to {} ({} new blocks)", from_block, current_block, blocks_to_process);
+
+    let mut total_events_found = 0;
+
+    // Poll for each event type
+    for (event_name, signature_hash) in key_events {
+        let filter = Filter::new()
+            .address(pool_address)
+            .event_signature(*signature_hash)
+            .from_block(BlockNumberOrTag::Number(from_block))
+            .to_block(BlockNumberOrTag::Number(current_block));
+
+        match provider.get_logs(&filter).await {
+            Ok(logs) => {
+                if !logs.is_empty() {
+                    info!("📊 Found {} {} events in blocks {}-{}", logs.len(), event_name, from_block, current_block);
+                    total_events_found += logs.len();
+                }
+                
+                for log in logs {
+                    if let Err(e) = handle_log_event(log, event_tx).await {
+                        error!("Error handling {} event: {}", event_name, e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to get {} events for blocks {}-{}: {}", event_name, from_block, current_block, e);
+                // Continue with other event types
+            }
+        }
+
+        // Brief delay between event type queries to avoid rate limiting
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    if total_events_found > 0 {
+        info!("✅ Processed {} total events from {} new blocks", total_events_found, blocks_to_process);
+    }
+
+    // Update last processed block
+    LAST_PROCESSED_BLOCK.store(current_block, Ordering::Relaxed);
+
     Ok(())
 }
 
