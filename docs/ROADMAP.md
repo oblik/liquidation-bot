@@ -19,13 +19,14 @@ This document outlines the development status and next steps for the Aave v3 liq
 - [x] **Oracle Price Monitoring**: Integrate with Chainlink price feeds to monitor for price changes that affect health factors, providing a second trigger for liquidations beyond direct user actions.
 
 ### Next Steps
-- [ ] **Profitability Calculation**: Implement logic to accurately estimate the profitability of a liquidation opportunity, considering the liquidation bonus, flash loan fees, DEX swap slippage, and gas costs.
-- [ ] **Liquidation Execution**: Implement the final logic to call the `AaveLiquidator` smart contract, sending a transaction to execute a liquidation when a profitable opportunity is found.
+- [x] **Profitability Calculation**: Implemented logic to simulate expected liquidation profit, factoring in liquidation bonus, slippage tolerance, gas costs, and flash loan fees. Opportunity is skipped if expected profit falls below the configured threshold.
+- [x] **Liquidation Execution**: Liquidations are now executed through the `AaveLiquidator` smart contract using flash loans. Errors are caught and logged, with legacy fallback handling for failed attempts.
+- [ ] **Price-Triggered Reassessment**: Complete the implementation of reacting to oracle price updates by rechecking health factors of users exposed to those assets.
 
 ## Phase 3: Production Hardening & Optimization (UPCOMING)
 - [ ] **Advanced Error Handling & Retries**: Implement more robust strategies for handling failed transactions and RPC endpoint issues.
 - [ ] **Gas Price Strategy**: Develop a dynamic gas pricing model to ensure transactions are mined competitively without overpaying.
-- [ ] **Multi-Asset & Multi-Collateral Logic**: Enhance profitability calculations to choose the best debt asset to repay and collateral to seize.
+- [ ] **Multi-Asset & Multi-Collateral Logic**: Improve debt-collateral pair selection with dynamic reserve index lookup, support for new assets without code changes, and enhanced logic to compute optimal liquidation combinations.
 - [ ] **Testing & Simulation**: Create a framework for backtesting strategies against historical data and simulating liquidations on forked networks.
 - [ ] **Containerization**: Provide a `Dockerfile` and `docker-compose` setup for easy deployment.
 - [ ] **Alerting & Dashboards**: Integrate with services like Prometheus, Grafana, or messaging apps to provide real-time alerts and performance dashboards.
@@ -34,4 +35,4 @@ This document outlines the development status and next steps for the Aave v3 liq
 
 ## Conclusion
 
-The core monitoring engine as well as the core price orace data fetching are now complete and functional. The next critical steps involve expanding price oracle data and building the profitability models to allow the bot to make informed, autonomous liquidation decisions.
+The core monitoring engine and price oracle data integration are now complete and functional. The bot executes liquidations with profit simulation and fallback logic. Next critical steps include improving reactivity to market-wide price changes, enhancing asset support coverage, and hardening execution strategy against edge cases.
