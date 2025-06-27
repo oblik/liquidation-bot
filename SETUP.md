@@ -4,13 +4,13 @@
 
 This is an Aave v3 liquidation bot for the Base network, written in Rust using modern `alloy-rs` libraries. The bot uses real-time WebSocket subscriptions to monitor Aave V3 events, dynamically discovers at-risk users, and persists data to a database.
 
-## Current Status (Phase 2: In Progress)
+## Current Status (Phase 2: Completed)
 
 - ✅ **Real-Time Monitoring**: The bot connects to a WebSocket endpoint to listen to all Aave Pool events.
 - ✅ **Dynamic User Discovery**: The bot automatically finds and tracks any user interacting with the Aave protocol.
 - ✅ **Database Persistence**: User positions and bot activity are saved to a SQLite or PostgreSQL database.
 - ✅ **Concurrent Architecture**: The bot is built on Tokio and handles multiple tasks in parallel for high performance.
-- 🚧 **Next Up**: Implementing oracle price monitoring and profitability calculations.
+- ✅ **Oracle Monitoring & Profitability Calculations**: Implemented real-time price feed tracking and liquidation profit simulation.
 
 ---
 
@@ -125,10 +125,10 @@ The bot is architected for high performance and reliability.
 
 ## Contributing
 This project follows the roadmap in `docs/ROADMAP.md`. Key areas for the next phase of contribution are:
-1.  **Price Oracles**: Integrate Chainlink feeds.
-2.  **Profitability Engine**: Build the profit calculation logic.
-3.  **Execution Logic**: Implement the final transaction-sending step.
-4.  **Testing**: Add a robust testing and simulation suite.
+1. **Price-Triggered Reassessment**: Complete logic to reassess health factors when oracle prices change.
+2. **Expanded Asset Support**: Improve asset indexing, reserve ID handling, and dynamic config ingestion.
+3. **Resilient Fallback Modes**: Add HTTP-based event polling fallback when WebSockets fail.
+4. **Testing**: Build a simulation suite with forked networks and unit tests.
 
 ## Network Information
 
@@ -137,10 +137,6 @@ This project follows the roadmap in `docs/ROADMAP.md`. Key areas for the next ph
 - **Chain ID:** 8453
 - **Aave Pool:** `0xA238Dd80C259a72e81d7e4664a9801593F98d1c5`
 - **Block Time:** ~2 seconds
-
-### Base Goerli (Testnet)
-- **RPC URL:** `https://goerli.base.org`
-- **Chain ID:** 84531
 
 ## Security Considerations
 
