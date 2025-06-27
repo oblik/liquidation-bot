@@ -1,0 +1,13 @@
+{
+  "network": "base",
+  "contractAddress": "0x88cd7c9ef3fBFEBe3492eeC683d86c5E825d1e04",
+  "deployerAddress": "0x502B5e67464f1D4506FFC71b6c7762312474EA30",
+  "deploymentTx": "0x45ce19094cb622286859fc14011487cbe26e76c570230cbbce6b66e21cae4f72",
+  "blockNumber": 32018195,
+  "timestamp": "2025-06-25T04:29:09.289Z",
+  "constructorArguments": {
+    "poolAddress": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+    "addressesProvider": "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e",
+    "swapRouter": "0x2626664c2603336E57B271c5C0b26F421741e481"
+  }
+}

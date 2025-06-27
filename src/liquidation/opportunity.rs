@@ -1,7 +1,6 @@
 use alloy_contract::ContractInstance;
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
-use chrono::Utc;
 use eyre::Result;
 use sqlx::{Pool, Sqlite};
 use std::sync::Arc;
@@ -118,7 +117,7 @@ pub async fn handle_liquidation_opportunity<P>(
 where
     P: Provider + 'static,
 {
-    info!("🎯 LIQUIDATION OPPORTUNITY DETECTED for user: {}", user);
+    info!("🎯 LIQUIDATION OPPORTUNITY DETECTED for user: {:?}", user);
 
     // Log the opportunity detection
     database::log_monitoring_event(
@@ -131,9 +130,26 @@ where
 
     // Get user position from database
     let user_position = match get_user_position_from_db(db_pool, user).await {
-        Ok(Some(position)) => position,
+        Ok(Some(position)) => {
+            debug!("✅ Found user position in database for liquidation opportunity");
+            position
+        },
         Ok(None) => {
-            warn!("User position not found in database: {}", user);
+            warn!("User position not found in database: {:?}", user);
+            
+            // Debug: Check how many total users are in the database
+            match sqlx::query!("SELECT COUNT(*) as count FROM user_positions")
+                .fetch_one(db_pool)
+                .await 
+            {
+                Ok(row) => {
+                    warn!("📊 Total users in database: {}", row.count);
+                }
+                Err(e) => {
+                    error!("Failed to count database users: {}", e);
+                }
+            }
+            
             return Ok(());
         }
         Err(e) => {
@@ -143,7 +159,7 @@ where
     };
 
     // Initialize asset configurations
-    let asset_configs = assets::init_base_sepolia_assets();
+    let asset_configs = assets::init_base_mainnet_assets();
 
     // Fetch user's actual collateral and debt assets from the blockchain
     let (user_collateral_assets, user_debt_assets) =
@@ -158,12 +174,12 @@ where
 
     // Validate that user has both collateral and debt
     if user_collateral_assets.is_empty() {
-        warn!("User {} has no collateral assets - cannot liquidate", user);
+        warn!("User {:?} has no collateral assets - cannot liquidate", user);
         return Ok(());
     }
 
     if user_debt_assets.is_empty() {
-        warn!("User {} has no debt assets - nothing to liquidate", user);
+        warn!("User {:?} has no debt assets - nothing to liquidate", user);
         return Ok(());
     }
 
@@ -175,7 +191,7 @@ where
     ) {
         Some(pair) => pair,
         None => {
-            warn!("No suitable liquidation pair found for user: {}", user);
+            warn!("No suitable liquidation pair found for user: {:?}", user);
             return Ok(());
         }
     };
@@ -298,14 +314,17 @@ async fn get_user_position_from_db(
     db_pool: &Pool<Sqlite>,
     user: Address,
 ) -> Result<Option<UserPosition>> {
-    // Use checksummed hex representation for consistent address matching
-    let user_str = format!("{:#x}", user);
+    let user_str = user.to_string();
+    
+    debug!("🔍 Looking up user in database: {} (formatted as: {})", user, user_str);
 
-    let row = sqlx::query!("SELECT * FROM user_positions WHERE address = ?", user_str)
+    // Try case-insensitive lookup to handle any format mismatches
+    let row = sqlx::query!("SELECT * FROM user_positions WHERE LOWER(address) = LOWER(?)", user_str)
         .fetch_optional(db_pool)
         .await?;
 
     if let Some(row) = row {
+        debug!("✅ Found user position in database: {}", user_str);
         let position = UserPosition {
             address: user,
             total_collateral_base: row.total_collateral_base.parse()?,
@@ -319,6 +338,7 @@ async fn get_user_position_from_db(
         };
         Ok(Some(position))
     } else {
+        debug!("❌ User position not found in database: {}", user_str);
         Ok(None)
     }
 }
@@ -329,10 +349,10 @@ async fn save_liquidation_record(
     opportunity: &crate::models::LiquidationOpportunity,
     tx_hash: &str,
 ) -> Result<()> {
-    // Use checksummed hex representation for consistent address storage
-    let user_str = format!("{:#x}", opportunity.user);
-    let collateral_str = format!("{:#x}", opportunity.collateral_asset);
-    let debt_str = format!("{:#x}", opportunity.debt_asset);
+    // Use checksummed hex representation for consistent address storage (matches database storage format)
+    let user_str = opportunity.user.to_string();
+    let collateral_str = opportunity.collateral_asset.to_string();
+    let debt_str = opportunity.debt_asset.to_string();
     let debt_covered_str = opportunity.debt_to_cover.to_string();
     let collateral_received_str = opportunity.expected_collateral_received.to_string();
     let profit_str = opportunity.estimated_profit.to_string();
@@ -375,7 +395,7 @@ pub async fn handle_liquidation_opportunity_legacy(
     )
     .await?;
 
-    info!("🎯 LIQUIDATION OPPORTUNITY DETECTED for user: {}", user);
+    info!("🎯 LIQUIDATION OPPORTUNITY DETECTED for user: {:?}", user);
     info!("⚠️  Enhanced liquidation execution requires provider and signer");
     info!("💰 Minimum profit threshold: {} wei", min_profit_threshold);
 

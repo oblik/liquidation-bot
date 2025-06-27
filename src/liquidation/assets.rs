@@ -2,11 +2,11 @@ use crate::models::LiquidationAssetConfig;
 use alloy_primitives::Address;
 use std::collections::HashMap;
 
-/// Initialize asset configurations for Base Sepolia testnet
-pub fn init_base_sepolia_assets() -> HashMap<Address, LiquidationAssetConfig> {
+/// Initialize asset configurations for Base mainnet
+pub fn init_base_mainnet_assets() -> HashMap<Address, LiquidationAssetConfig> {
     let mut assets = HashMap::new();
 
-    // WETH (Wrapped Ether) - Primary asset
+    // WETH (Wrapped Ether) - Base mainnet
     let weth = LiquidationAssetConfig {
         address: "0x4200000000000000000000000000000000000006"
             .parse()
@@ -20,9 +20,9 @@ pub fn init_base_sepolia_assets() -> HashMap<Address, LiquidationAssetConfig> {
     };
     assets.insert(weth.address, weth);
 
-    // USDC - Major stablecoin
+    // USDC - Base mainnet
     let usdc = LiquidationAssetConfig {
-        address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+        address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
             .parse()
             .unwrap(),
         symbol: "USDC".to_string(),
@@ -34,7 +34,7 @@ pub fn init_base_sepolia_assets() -> HashMap<Address, LiquidationAssetConfig> {
     };
     assets.insert(usdc.address, usdc);
 
-    // cbETH - Coinbase Wrapped Staked ETH
+    // cbETH - Coinbase Wrapped Staked ETH - Base mainnet
     let cbeth = LiquidationAssetConfig {
         address: "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22"
             .parse()
@@ -47,23 +47,6 @@ pub fn init_base_sepolia_assets() -> HashMap<Address, LiquidationAssetConfig> {
         is_borrowable: false,
     };
     assets.insert(cbeth.address, cbeth);
-
-    // DAI - Decentralized stablecoin
-    // DISABLED: DAI is not officially available on Base Sepolia testnet via Aave V3
-    // Base Sepolia only supports: WETH, USDC, cbETH based on official Aave deployments
-    // TODO: Re-enable when migrating to Base Mainnet or a network that supports DAI
-    let dai = LiquidationAssetConfig {
-        address: "0xcf4dA3b4F6e7c1a2bC6e45b0C8b3d9d8e7f2C5B1"
-            .parse()
-            .unwrap(), // Placeholder - DAI not available on Base Sepolia
-        symbol: "DAI".to_string(),
-        decimals: 18,
-        asset_id: 3,
-        liquidation_bonus: 500, // 5%
-        is_collateral: false,   // DISABLED: DAI not supported on Base Sepolia testnet
-        is_borrowable: false,   // DISABLED: DAI not supported on Base Sepolia testnet
-    };
-    assets.insert(dai.address, dai);
 
     assets
 }

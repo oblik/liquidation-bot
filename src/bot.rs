@@ -18,7 +18,7 @@ use crate::liquidation;
 use crate::models::{
     AssetConfig, HardhatArtifact, LiquidationAssetConfig, PriceFeed, UserPosition,
 };
-use crate::monitoring::{oracle, scanner, websocket};
+use crate::monitoring::{discovery, oracle, scanner, websocket};
 
 // Main bot struct with event monitoring capabilities
 pub struct LiquidationBot<P> {
@@ -60,8 +60,8 @@ where
         let artifact: HardhatArtifact = serde_json::from_str(artifact_str)?;
         let interface = Interface::new(artifact.abi);
 
-        // Aave V3 Pool address on Base Sepolia testnet
-        let pool_addr: Address = "0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b".parse()?;
+        // Aave V3 Pool address on Base mainnet
+        let pool_addr: Address = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5".parse()?;
         let pool_contract = interface.connect(pool_addr, provider.clone());
 
         // Try to create WebSocket provider for event monitoring
@@ -91,7 +91,7 @@ where
         let asset_configs = oracle::init_asset_configs();
 
         // Initialize liquidation asset configurations
-        let liquidation_assets = liquidation::init_base_sepolia_assets();
+        let liquidation_assets = liquidation::init_base_mainnet_assets();
 
         // Get liquidator contract address from config
         let liquidator_contract_address = config.liquidator_contract;
@@ -291,6 +291,29 @@ where
     pub async fn run(&self) -> Result<()> {
         info!("🚀 Starting Aave v3 Liquidation Bot with Real-Time WebSocket Monitoring");
 
+        // First, perform initial user discovery to populate the database
+        info!("🔍 Performing initial user discovery...");
+        let pool_address = *self.pool_contract.address();
+
+        match discovery::discover_initial_users(
+            self.provider.clone(),
+            pool_address,
+            &self.db_pool,
+            self.event_tx.clone(),
+        )
+        .await
+        {
+            Ok(discovered_users) => {
+                info!(
+                    "✅ Initial discovery completed. Found {} users to monitor",
+                    discovered_users.len()
+                );
+            }
+            Err(e) => {
+                warn!("⚠️ Initial user discovery failed: {}. Continuing with event-based monitoring only.", e);
+            }
+        }
+
         // Start all monitoring services
         tokio::try_join!(
             websocket::start_event_monitoring(
@@ -309,6 +332,8 @@ where
             ),
             self.run_event_processor(),
             scanner::run_periodic_scan(
+                self.provider.clone(),
+                pool_address,
                 self.db_pool.clone(),
                 self.event_tx.clone(),
                 self.config.clone(),
