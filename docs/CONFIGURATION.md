@@ -116,7 +116,7 @@ RUST_LOG=info
 
 ### Base Sepolia Testnet
 - **Chain ID**: 84532
-- **Aave Pool**: `0xA37D7E3d3CaD89b44f9a08A96fE01a9F39Bd7794`
+- **Aave Pool**: `0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b`
 - **Block Time**: ~2 seconds
 - **Test Liquidator**: `0x4818d1cb788C733Ae366D6d1D463EB48A0544528`
 

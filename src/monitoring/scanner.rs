@@ -12,15 +12,13 @@ use parking_lot::RwLock as SyncRwLock;
 use sqlx::{Pool, Sqlite};
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::SystemTime;
 use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 // Threshold constants for health factor calculations (in 18 decimals)
 const LIQUIDATION_THRESHOLD: u64 = 1000000000000000000; // 1.0 * 1e18 - liquidation can occur
-const CRITICAL_THRESHOLD: u64 = 1100000000000000000; // 1.1 * 1e18 - critically at risk
-const CHANGE_THRESHOLD: u64 = 10000000000000000; // 0.01 * 1e18 - 1% change for logging
+const CRITICAL_THRESHOLD: u64 = 1100000000000000000;    // 1.1 * 1e18 - critically at risk 
+const CHANGE_THRESHOLD: u64 = 10000000000000000;        // 0.01 * 1e18 - 1% change for logging
 
 /// Guard to ensure user is removed from processing set when dropped
 struct ProcessingGuard {
@@ -97,143 +95,54 @@ fn parse_u256_from_result(
 }
 
 pub async fn check_user_health<P>(
-    provider: &Arc<P>,
-    pool_address: Address,
-    user_address: Address,
-    max_retries: u32,
+    _provider: Arc<P>,
+    pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
+    user: Address,
+    health_factor_threshold: U256,
 ) -> Result<UserPosition>
 where
     P: Provider,
 {
-    let mut attempt = 0;
-    let mut base_delay = Duration::from_millis(100);
+    debug!("Checking health factor for user: {:?}", user);
 
-    loop {
-        attempt += 1;
+    // Call getUserAccountData
+    let args = [alloy_dyn_abi::DynSolValue::Address(user)];
+    let call = pool_contract.function("getUserAccountData", &args)?;
+    let result = call.call().await?;
 
-        match try_check_user_health(provider, pool_address, user_address).await {
-            Ok(data) => return Ok(data),
-            Err(e) => {
-                let error_msg = e.to_string();
+    // Parse the result with proper error handling
+    let total_collateral_base = parse_u256_from_result(&result, 0, "total_collateral_base")?;
+    let total_debt_base = parse_u256_from_result(&result, 1, "total_debt_base")?;
+    let available_borrows_base = parse_u256_from_result(&result, 2, "available_borrows_base")?;
+    let current_liquidation_threshold =
+        parse_u256_from_result(&result, 3, "current_liquidation_threshold")?;
+    let ltv = parse_u256_from_result(&result, 4, "ltv")?;
+    let health_factor = parse_u256_from_result(&result, 5, "health_factor")?;
 
-                // Check for rate limiting or network errors
-                if error_msg.contains("429")
-                    || error_msg.contains("rate limit")
-                    || error_msg.contains("too many requests")
-                    || error_msg.contains("connection")
-                    || error_msg.contains("timeout")
-                {
-                    if attempt >= max_retries {
-                        error!(
-                            "Max retries ({}) exceeded for user health check: {}",
-                            max_retries, e
-                        );
-                        return Err(e);
-                    }
-
-                    // Exponential backoff with jitter
-                    let jitter_ms = (SystemTime::now()
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis()
-                        % 100) as u64;
-                    let jitter = Duration::from_millis(jitter_ms);
-                    let delay = base_delay + jitter;
-
-                    warn!(
-                        "Rate limited or network error (attempt {}/{}), retrying in {:?}: {}",
-                        attempt, max_retries, delay, error_msg
-                    );
-
-                    sleep(delay).await;
-                    base_delay = std::cmp::min(base_delay * 2, Duration::from_secs(30)); // Cap at 30s
-                    continue;
-                }
-
-                // For other errors, fail immediately
-                error!("User health check failed for {}: {}", user_address, e);
-                return Err(e);
-            }
-        }
-    }
-}
-
-async fn try_check_user_health<P>(
-    provider: &Arc<P>,
-    pool_address: Address,
-    user_address: Address,
-) -> Result<UserPosition>
-where
-    P: Provider,
-{
-    debug!("Checking health factor for user: {:?}", user_address);
-
-    // Call getUserAccountData with proper error handling
-    let call_data = match alloy_primitives::hex::decode("bf92857c") {
-        Ok(data) => data,
-        Err(e) => {
-            return Err(eyre::eyre!(
-                "Failed to decode getUserAccountData selector: {}",
-                e
-            ));
-        }
-    };
-
-    // Encode the user address parameter
-    let mut full_call_data = call_data;
-    let mut user_bytes = [0u8; 32];
-    let user_address_bytes = user_address.as_slice();
-    user_address_bytes.iter().enumerate().for_each(|(i, &b)| {
-        user_bytes[i + 12] = b; // Address is 20 bytes, pad to 32
-    });
-    full_call_data.extend_from_slice(&user_bytes);
-
-    let call_request = alloy_rpc_types::TransactionRequest {
-        to: Some(pool_address.into()),
-        input: alloy_rpc_types::TransactionInput::new(full_call_data.into()),
-        ..Default::default()
-    };
-
-    let result = provider.call(&call_request).await?;
-
-    // Parse the result - getUserAccountData returns 6 uint256 values
-    if result.len() < 192 {
-        // 6 * 32 bytes
-        return Err(eyre::eyre!(
-            "Invalid response length from getUserAccountData: {} bytes, expected at least 192",
-            result.len()
-        ));
-    }
-
-    // Parse the 6 uint256 values returned by getUserAccountData
-    let total_collateral_base = U256::from_be_slice(&result[0..32]);
-    let total_debt_base = U256::from_be_slice(&result[32..64]);
-    let available_borrows_base = U256::from_be_slice(&result[64..96]);
-    let current_liquidation_threshold = U256::from_be_slice(&result[96..128]);
-    let ltv = U256::from_be_slice(&result[128..160]);
-    let health_factor = U256::from_be_slice(&result[160..192]);
-
-    debug!(
-        "User {} health data: collateral={}, debt={}, health_factor={}",
-        user_address, total_collateral_base, total_debt_base, health_factor
-    );
-
-    // Check if user is at risk (health factor < 1.1)
-    let risk_threshold = U256::from(1100000000000000000u64); // 1.1 in 18 decimals
-    let is_at_risk = health_factor < risk_threshold && health_factor > U256::ZERO;
+    // Use the configurable threshold for consistent at-risk detection
+    // This threshold should be set above the liquidation threshold (1.0) to provide early warning
+    let is_at_risk = health_factor < health_factor_threshold;
 
     let position = UserPosition {
-        address: user_address,
+        address: user,
         total_collateral_base,
         total_debt_base,
         available_borrows_base,
         current_liquidation_threshold,
         ltv,
         health_factor,
-        last_updated: chrono::Utc::now(),
+        last_updated: Utc::now(),
         is_at_risk,
     };
 
+    info!(
+        "📊 User {:?} health check: HF={}, Collateral={}, Debt={}, At-risk={}",
+        user,
+        format_health_factor(health_factor),
+        total_collateral_base,
+        total_debt_base,
+        is_at_risk
+    );
     Ok(position)
 }
 
@@ -257,7 +166,7 @@ where
         None => return Ok(()), // User already being processed
     };
 
-    let result = check_user_health(&provider, *pool_contract.address(), user, 3).await;
+    let result = check_user_health(provider, pool_contract, user, health_factor_threshold).await;
 
     match result {
         Ok(position) => {
@@ -270,28 +179,17 @@ where
             // Update in memory first (this is atomic due to DashMap's internal locking)
             user_positions.insert(user, position.clone());
 
-            // Save to database first before any events
-            let database_save_successful =
-                match crate::database::save_user_position(db_pool, &position).await {
-                    Ok(()) => {
-                        debug!(
-                            "✅ Successfully saved user position to database: {:?}",
-                            user
-                        );
-                        true
-                    }
-                    Err(e) => {
-                        error!("Failed to save user position for {:?}: {}", user, e);
-                        false
-                    }
-                };
+            // Save to database
+            if let Err(e) = database::save_user_position(db_pool, &position).await {
+                error!("Failed to save user position: {}", e);
+            }
 
             // TODO: Populate users_by_collateral mapping by calling getUserConfiguration
             // and getReservesList to determine which assets this user has as collateral
             // For now, we'll add this user to WETH collateral as a fallback since that's what we monitor
             if let Some(users_by_collateral) = &users_by_collateral {
                 if position.total_collateral_base > U256::ZERO {
-                    // Base mainnet WETH address
+                    // Base Sepolia WETH address - in production, you'd call getUserConfiguration
                     match "0x4200000000000000000000000000000000000006".parse::<Address>() {
                         Ok(weth_address) => {
                             users_by_collateral
@@ -301,24 +199,16 @@ where
                             debug!("Added user {:?} to WETH collateral tracking", user);
                         }
                         Err(e) => {
-                            error!(
-                                "Failed to parse WETH address for collateral tracking: {}",
-                                e
-                            );
+                            error!("Failed to parse WETH address for collateral tracking: {}", e);
                         }
                     }
                 }
             }
 
-            // Only check for liquidation opportunity if database save was successful
-            if database_save_successful
-                && position.health_factor < U256::from(LIQUIDATION_THRESHOLD)
+            // Check for liquidation opportunity
+            if position.health_factor < U256::from(LIQUIDATION_THRESHOLD)
                 && position.total_debt_base > U256::ZERO
             {
-                debug!(
-                    "🎯 Sending liquidation opportunity event for user: {:?}",
-                    user
-                );
                 let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
             }
 
@@ -414,16 +304,11 @@ where
     Ok(())
 }
 
-pub async fn run_periodic_scan<P>(
-    provider: Arc<P>,
-    pool_address: Address,
+pub async fn run_periodic_scan(
     db_pool: Pool<Sqlite>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
     config: BotConfig,
-) -> Result<()>
-where
-    P: Provider,
-{
+) -> Result<()> {
     info!("Starting periodic position scan...");
 
     let mut interval = tokio::time::interval(
@@ -444,77 +329,13 @@ where
 
         info!("Scanning {} at-risk users", at_risk_users.len());
 
-        // Check health for each user with rate limiting
-        let mut checked_users = 0;
-        let mut at_risk_users_count = 0;
-
-        for user in &at_risk_users {
-            // Add small delay between checks to avoid rate limiting
-            if checked_users > 0 && checked_users % 10 == 0 {
-                sleep(Duration::from_millis(200)).await; // Brief pause every 10 users
-            }
-
-            match check_user_health(&provider, pool_address, *user, 3).await {
-                Ok(position) => {
-                    checked_users += 1;
-
-                    if position.is_at_risk {
-                        at_risk_users_count += 1;
-                        info!(
-                            "⚠️  At-risk user found: {:?} (HF: {})",
-                            user,
-                            format_health_factor(position.health_factor)
-                        );
-
-                        // Store in database
-                        if let Err(e) =
-                            crate::database::save_user_position(&db_pool, &position).await
-                        {
-                            error!("Failed to store user position: {}", e);
-                        }
-
-                        // Send to liquidation opportunity channel
-                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(*user)) {
-                            warn!("Failed to send liquidation opportunity: {}", e);
-                        }
-                    }
-
-                    // Brief delay between individual checks
-                    sleep(Duration::from_millis(50)).await;
-                }
-                Err(e) => {
-                    error!("Failed to check user health for {:?}: {}", user, e);
-                    // Continue with next user rather than failing completely
-                }
-            }
+        for user_addr in at_risk_users {
+            let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr));
         }
 
         // If we have a specific target user, always check them
         if let Some(target_user) = config.target_user {
             let _ = event_tx.send(BotEvent::UserPositionChanged(target_user));
-        }
-
-        info!(
-            "📊 Status Report: {} positions tracked, {} at risk, {} liquidatable",
-            at_risk_users.len(),
-            at_risk_users_count,
-            at_risk_users.len() - at_risk_users_count
-        );
-
-        if let Err(e) = database::log_monitoring_event(
-            &db_pool,
-            "status_report",
-            None,
-            Some(&format!(
-                "positions:{}, at_risk:{}, liquidatable:{}",
-                at_risk_users.len(),
-                at_risk_users_count,
-                at_risk_users.len() - at_risk_users_count
-            )),
-        )
-        .await
-        {
-            error!("Failed to log status report: {}", e);
         }
     }
 }
