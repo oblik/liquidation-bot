@@ -165,3 +165,21 @@ pub async fn get_at_risk_users(db_pool: &Pool<Sqlite>) -> Result<Vec<Address>> {
     }
     Ok(users)
 }
+
+pub async fn get_all_users(db_pool: &Pool<Sqlite>) -> Result<Vec<Address>> {
+    let rows = sqlx::query(
+        "SELECT address FROM user_positions 
+         ORDER BY last_updated DESC"
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    let mut users = Vec::new();
+    for row in rows {
+        let addr_str: String = row.get("address");
+        if let Ok(addr) = addr_str.parse() {
+            users.push(addr);
+        }
+    }
+    Ok(users)
+}

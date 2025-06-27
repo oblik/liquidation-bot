@@ -314,6 +314,12 @@ where
             }
         }
 
+        // Populate users_by_collateral mapping for all users in database
+        info!("🗺️ Populating users_by_collateral mapping for all discovered users...");
+        if let Err(e) = self.populate_initial_collateral_mapping().await {
+            warn!("Failed to populate initial collateral mapping: {}", e);
+        }
+
         // Start all monitoring services
         tokio::try_join!(
             websocket::start_event_monitoring(
@@ -341,6 +347,36 @@ where
             scanner::start_status_reporter(self.db_pool.clone(), self.user_positions.clone(),),
         )?;
 
+        Ok(())
+    }
+
+    /// Populate users_by_collateral mapping for all users in the database
+    async fn populate_initial_collateral_mapping(&self) -> Result<()> {
+        // Get all users from database
+        let all_users = match database::get_all_users(&self.db_pool).await {
+            Ok(users) => users,
+            Err(e) => {
+                error!("Failed to get all users from database: {}", e);
+                return Ok(()); // Don't fail startup for this
+            }
+        };
+
+        info!("📋 Populating collateral mapping for {} users from database", all_users.len());
+
+        let mut processed_count = 0;
+
+        for user in all_users {
+            // Trigger a user position update to populate collateral mapping
+            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user));
+            processed_count += 1;
+
+            // Add small delay to avoid overwhelming the system
+            if processed_count % 10 == 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            }
+        }
+
+        info!("✅ Queued {} users for collateral mapping population", processed_count);
         Ok(())
     }
 }
