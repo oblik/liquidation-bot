@@ -36,7 +36,7 @@ where
 
     info!("🚀 Starting real-time WebSocket event monitoring...");
 
-    let pool_address: Address = "0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b".parse()?;
+    let pool_address: Address = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5".parse()?;
 
     // Create a general filter for all events from the Aave pool
     let pool_filter = Filter::new().address(pool_address);

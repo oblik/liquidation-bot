@@ -15,13 +15,13 @@ use tracing::{debug, error, info, warn};
 pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
     let mut configs = HashMap::new();
 
-    // Base Sepolia testnet asset configurations
-    // Only including verified working oracle feeds
+    // Base mainnet asset configurations
+    // Updated for Base mainnet deployment
 
-    // WETH - CONFIRMED WORKING ✅
+    // WETH - Base mainnet configuration
     match (
         "0x4200000000000000000000000000000000000006".parse::<Address>(),
-        "0x4aDC67696bA383F43DD60A9e78F2C97Fbbfc7cb1".parse::<Address>(),
+        "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70".parse::<Address>(),
     ) {
         (Ok(weth_address), Ok(weth_feed_address)) => {
             configs.insert(
@@ -29,8 +29,8 @@ pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
                 AssetConfig {
                     address: weth_address,
                     symbol: "WETH".to_string(),
-                    chainlink_feed: weth_feed_address, // ETH/USD on Base Sepolia ✅
-                    price_change_threshold: 0.005, // 0.5% price change threshold (reduced from 2%)
+                    chainlink_feed: weth_feed_address, // ETH/USD on Base mainnet
+                    price_change_threshold: 0.005,     // 0.5% price change threshold
                 },
             );
         }
@@ -42,12 +42,29 @@ pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
         }
     }
 
-    // Note: USDC/USDT oracle feeds are not available or working on Base Sepolia testnet
-    // In production on Base mainnet, you would add:
-    // - USDC: Different oracle address
-    // - USDT: Different oracle address
-    // - DAI: Different oracle address
-    // For now, focusing on working WETH oracle for demonstration
+    // USDC - Base mainnet configuration
+    match (
+        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".parse::<Address>(),
+        "0x7e860098F58bBFC8648a4311b374B1D669a2bc6B".parse::<Address>(),
+    ) {
+        (Ok(usdc_address), Ok(usdc_feed_address)) => {
+            configs.insert(
+                usdc_address,
+                AssetConfig {
+                    address: usdc_address,
+                    symbol: "USDC".to_string(),
+                    chainlink_feed: usdc_feed_address, // USDC/USD on Base mainnet
+                    price_change_threshold: 0.001,     // 0.1% price change threshold (stablecoin)
+                },
+            );
+        }
+        (Err(e), _) => {
+            error!("Failed to parse USDC address: {}", e);
+        }
+        (_, Err(e)) => {
+            error!("Failed to parse USDC chainlink feed address: {}", e);
+        }
+    }
 
     info!(
         "Initialized {} asset configuration(s) for oracle monitoring",
@@ -359,16 +376,17 @@ pub async fn fetch_price_from_oracle<P>(
 where
     P: Provider,
 {
-    // Create a simple call to the price feed's latestAnswer() function
-    let call_data = match alloy_primitives::hex::decode("50d25bcd") {
+    // Create a call to the price feed's latestRoundData() function
+    // latestRoundData() is the standard method for modern Chainlink price feeds
+    let call_data = match alloy_primitives::hex::decode("feaf968c") {
         Ok(data) => data,
         Err(e) => {
             return Err(eyre::eyre!(
-                "Failed to decode latestAnswer() selector: {}",
+                "Failed to decode latestRoundData() selector: {}",
                 e
             ));
         }
-    }; // latestAnswer() selector
+    }; // latestRoundData() selector
 
     let call_request = alloy_rpc_types::TransactionRequest {
         to: Some(feed_address.into()),
@@ -378,12 +396,14 @@ where
 
     match provider.call(&call_request).await {
         Ok(result) => {
-            if result.len() >= 32 {
-                let price = U256::from_be_slice(&result[..32]);
+            // latestRoundData returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
+            // We need the answer which is at bytes 32-64 (second 32-byte slot)
+            if result.len() >= 64 {
+                let price = U256::from_be_slice(&result[32..64]);
                 debug!("Fetched price for {}: {}", symbol, price);
                 Ok(price)
             } else {
-                Err(eyre::eyre!("Invalid price data length for {}", symbol))
+                Err(eyre::eyre!("Invalid price data length for {}: expected at least 64 bytes for latestRoundData(), got {}", symbol, result.len()))
             }
         }
         Err(e) => {
