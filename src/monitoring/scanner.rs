@@ -254,21 +254,21 @@ where
 
     // Validate that we have at least one element in the result
     if user_config_result.is_empty() {
-        return Ok(Vec::new());
+        return Err(eyre::eyre!("Empty result from getUserConfiguration call"));
     }
 
     // Extract the configuration data from the tuple
     let config_data = if let alloy_dyn_abi::DynSolValue::Tuple(tuple) = &user_config_result[0] {
         if tuple.is_empty() {
-            return Ok(Vec::new());
+            return Err(eyre::eyre!("Empty tuple in getUserConfiguration result"));
         }
         if let alloy_dyn_abi::DynSolValue::Uint(data, _) = &tuple[0] {
             *data
         } else {
-            return Ok(Vec::new());
+            return Err(eyre::eyre!("Failed to parse configuration data as uint"));
         }
     } else {
-        return Ok(Vec::new());
+        return Err(eyre::eyre!("getUserConfiguration result is not a tuple"));
     };
 
     // Get reserves list
@@ -277,7 +277,7 @@ where
 
     // Validate that we have at least one element in the result
     if reserves_result.is_empty() {
-        return Ok(Vec::new());
+        return Err(eyre::eyre!("Empty result from getReservesList call"));
     }
 
     // Extract reserves array
@@ -294,7 +294,7 @@ where
                 })
                 .collect()
         } else {
-            return Ok(Vec::new());
+            return Err(eyre::eyre!("getReservesList result is not an array"));
         };
 
     debug!("Found {} reserves in the pool", reserves.len());
@@ -320,6 +320,8 @@ where
         user_collateral_assets.len()
     );
 
+    // Note: Returning an empty vector here is valid - it means the user genuinely
+    // has no collateral assets, which is different from parsing errors above
     Ok(user_collateral_assets)
 }
 
@@ -333,17 +335,11 @@ where
     P: Provider,
 {
     // Get user's collateral assets
-    let collateral_assets = match get_user_collateral_assets(pool_contract, user).await {
-        Ok(assets) => assets,
-        Err(e) => {
-            debug!("Failed to get collateral assets for user {:?}: {}", user, e);
-            return Ok(()); // Don't fail the entire operation for one user
-        }
-    };
+    let collateral_assets = get_user_collateral_assets(pool_contract, user).await?;
 
     // Remove user from all existing collateral mappings first
     for mut entry in users_by_collateral.iter_mut() {
-        entry.remove(&user);
+        entry.value_mut().remove(&user);
     }
 
     // Add user to correct collateral asset mappings
