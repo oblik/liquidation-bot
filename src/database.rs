@@ -98,10 +98,19 @@ pub async fn init_database(database_url: &str) -> Result<Pool<Sqlite>> {
 
 pub async fn save_user_position(db_pool: &Pool<Sqlite>, position: &UserPosition) -> Result<()> {
     let address_str = position.address.to_string();
-    tracing::debug!("💾 Saving user position to database: {} (stored as: {})", position.address, address_str);
-    tracing::debug!("💾 Position details: HF={}, debt={}, collateral={}, at_risk={}", 
-        position.health_factor, position.total_debt_base, position.total_collateral_base, position.is_at_risk);
-    
+    tracing::debug!(
+        "💾 Saving user position to database: {} (stored as: {})",
+        position.address,
+        address_str
+    );
+    tracing::debug!(
+        "💾 Position details: HF={}, debt={}, collateral={}, at_risk={}",
+        position.health_factor,
+        position.total_debt_base,
+        position.total_collateral_base,
+        position.is_at_risk
+    );
+
     let result = sqlx::query(
         r#"
         INSERT OR REPLACE INTO user_positions 
@@ -121,8 +130,12 @@ pub async fn save_user_position(db_pool: &Pool<Sqlite>, position: &UserPosition)
     .bind(position.is_at_risk)
     .execute(db_pool)
     .await?;
-    
-    tracing::debug!("✅ Database save completed successfully for {} (rows affected: {})", address_str, result.rows_affected());
+
+    tracing::debug!(
+        "✅ Database save completed successfully for {} (rows affected: {})",
+        address_str,
+        result.rows_affected()
+    );
     Ok(())
 }
 
@@ -152,6 +165,24 @@ pub async fn get_at_risk_users(db_pool: &Pool<Sqlite>) -> Result<Vec<Address>> {
          WHERE is_at_risk = TRUE OR total_debt_base != '0' 
          ORDER BY health_factor ASC 
          LIMIT 100",
+    )
+    .fetch_all(db_pool)
+    .await?;
+
+    let mut users = Vec::new();
+    for row in rows {
+        let addr_str: String = row.get("address");
+        if let Ok(addr) = addr_str.parse() {
+            users.push(addr);
+        }
+    }
+    Ok(users)
+}
+
+pub async fn get_all_users(db_pool: &Pool<Sqlite>) -> Result<Vec<Address>> {
+    let rows = sqlx::query(
+        "SELECT address FROM user_positions 
+         ORDER BY last_updated DESC",
     )
     .fetch_all(db_pool)
     .await?;
