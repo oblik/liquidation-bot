@@ -1,7 +1,3 @@
-use crate::config::BotConfig;
-use crate::database;
-use crate::events::BotEvent;
-use crate::models::UserPosition;
 use alloy_contract::ContractInstance;
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
@@ -10,12 +6,17 @@ use dashmap::DashMap;
 use eyre::Result;
 use parking_lot::RwLock as SyncRwLock;
 use sqlx::{Pool, Sqlite};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration};
+use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
+
+use crate::config::BotConfig;
+use crate::database;
+use crate::events::BotEvent;
+use crate::models::{AssetConfig, UserPosition};
 
 // Threshold constants for health factor calculations (in 18 decimals)
 const LIQUIDATION_THRESHOLD: u64 = 1000000000000000000; // 1.0 * 1e18 - liquidation can occur
@@ -326,10 +327,11 @@ where
 }
 
 /// Update the users_by_collateral mapping for a specific user
-async fn update_user_collateral_mapping<P>(
+pub async fn update_user_collateral_mapping<P>(
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     user: Address,
     users_by_collateral: &Arc<DashMap<Address, HashSet<Address>>>,
+    asset_configs: Option<&HashMap<Address, AssetConfig>>,
 ) -> Result<()>
 where
     P: Provider,
@@ -348,10 +350,23 @@ where
             .entry(asset_address)
             .or_insert_with(HashSet::new)
             .insert(user);
+        
+        // Log with asset symbol if available
+        let asset_symbol = asset_configs
+            .and_then(|configs| configs.get(&asset_address))
+            .map(|config| config.symbol.as_str())
+            .unwrap_or("Unknown");
+        
         debug!(
-            "Mapped user {:?} to collateral asset {}",
-            user, asset_address
+            "Mapped user {:?} to collateral asset {} ({})",
+            user, asset_address, asset_symbol
         );
+    }
+
+    // If no collateral assets found but we have asset configs, that's normal
+    // (user might not have any collateral), don't use fallbacks
+    if collateral_assets.is_empty() {
+        debug!("User {:?} has no collateral assets", user);
     }
 
     Ok(())
@@ -367,6 +382,7 @@ pub async fn update_user_position<P>(
     health_factor_threshold: U256,
     user: Address,
     users_by_collateral: Option<Arc<DashMap<Address, HashSet<Address>>>>,
+    asset_configs: Option<&HashMap<Address, AssetConfig>>,
 ) -> Result<()>
 where
     P: Provider,
@@ -410,35 +426,19 @@ where
             // and getReservesList to determine which assets this user has as collateral
             if let Some(users_by_collateral) = &users_by_collateral {
                 if position.total_collateral_base > U256::ZERO {
-                    // Update the collateral mapping for this user
-                    if let Err(e) =
-                        update_user_collateral_mapping(pool_contract, user, users_by_collateral)
-                            .await
+                    // Update the collateral mapping for this user using all configured assets
+                    if let Err(e) = update_user_collateral_mapping(
+                        pool_contract,
+                        user,
+                        users_by_collateral,
+                        asset_configs,
+                    )
+                    .await
                     {
                         error!(
                             "Failed to update collateral mapping for user {:?}: {}",
                             user, e
                         );
-
-                        // Fallback to WETH mapping for Base mainnet
-                        match "0x4200000000000000000000000000000000000006".parse::<Address>() {
-                            Ok(weth_address) => {
-                                users_by_collateral
-                                    .entry(weth_address)
-                                    .or_insert_with(HashSet::new)
-                                    .insert(user);
-                                debug!(
-                                    "Added user {:?} to WETH collateral tracking (fallback)",
-                                    user
-                                );
-                            }
-                            Err(e) => {
-                                error!(
-                                    "Failed to parse WETH address for collateral tracking: {}",
-                                    e
-                                );
-                            }
-                        }
                     } else {
                         debug!(
                             "✅ Successfully updated collateral mapping for user {:?}",
@@ -558,6 +558,7 @@ pub async fn run_periodic_scan<P>(
     db_pool: Pool<Sqlite>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
     config: BotConfig,
+    asset_configs: HashMap<Address, AssetConfig>,
 ) -> Result<()>
 where
     P: Provider,
@@ -660,7 +661,8 @@ where
 pub async fn start_status_reporter(
     db_pool: Pool<Sqlite>,
     user_positions: Arc<DashMap<Address, UserPosition>>,
-) -> Result<()> {
+) -> Result<()>
+{
     info!("Starting status reporter...");
 
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // Every 5 minutes

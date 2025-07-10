@@ -148,6 +148,7 @@ where
                         self.config.health_factor_threshold,
                         user,
                         Some(self.users_by_collateral.clone()),
+                        Some(&self.asset_configs),
                     )
                     .await
                     {
@@ -227,26 +228,48 @@ where
                 feed.asset_symbol, old_price, new_price
             );
 
-            // Get all users who have this asset as collateral
-            if let Some(users) = self.users_by_collateral.get(&asset_address) {
+            // Since any asset price change can affect user health factors (due to cross-collateral effects),
+            // we need to check all users who have ANY collateral, not just users with this specific asset
+            let mut users_to_check = HashSet::new();
+
+            // First, collect all users who have this specific asset as collateral
+            if let Some(asset_users) = self.users_by_collateral.get(&asset_address) {
+                for user in asset_users.iter() {
+                    users_to_check.insert(*user);
+                }
                 info!(
-                    "📊 Recalculating health factors for {} users affected by {} price change",
-                    users.len(),
+                    "📊 Found {} users directly holding {} as collateral",
+                    asset_users.len(),
+                    feed.asset_symbol
+                );
+            }
+
+            // Additionally, collect users from all other tracked collateral assets since price changes
+            // can affect health factors through cross-collateral effects
+            for entry in self.users_by_collateral.iter() {
+                for user in entry.value().iter() {
+                    users_to_check.insert(*user);
+                }
+            }
+
+            if !users_to_check.is_empty() {
+                info!(
+                    "🔍 Triggering health checks for {} total users affected by {} price change",
+                    users_to_check.len(),
                     feed.asset_symbol
                 );
 
                 // Trigger health factor recalculation for all affected users
-                for user in users.iter() {
+                for user in users_to_check {
                     info!("🔍 Triggering health check for user: {:?}", user);
-                    let _ = self.event_tx.send(BotEvent::UserPositionChanged(*user));
+                    let _ = self.event_tx.send(BotEvent::UserPositionChanged(user));
                 }
             } else {
                 info!(
-                    "⚠️ No users mapped to {} collateral yet, triggering broader health check",
-                    feed.asset_symbol
+                    "⚠️ No users mapped to any collateral yet, triggering broader health check"
                 );
 
-                // Fallback: If we don't have users mapped to this collateral yet,
+                // Fallback: If we don't have users mapped to collateral yet,
                 // trigger a check of all currently tracked users
                 let tracked_user_count = self.user_positions.len();
                 if tracked_user_count > 0 {
@@ -343,6 +366,7 @@ where
                 self.db_pool.clone(),
                 self.event_tx.clone(),
                 self.config.clone(),
+                self.asset_configs.clone(),
             ),
             scanner::start_status_reporter(self.db_pool.clone(), self.user_positions.clone(),),
         )?;
