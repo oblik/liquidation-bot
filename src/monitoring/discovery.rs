@@ -1,16 +1,16 @@
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
-use alloy_rpc_types::{Filter, BlockNumberOrTag};
+use alloy_rpc_types::{BlockNumberOrTag, Filter};
 use alloy_sol_types::SolEvent;
 use eyre::Result;
 use sqlx::{Pool, Sqlite};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn, debug};
+use tracing::{debug, error, info, warn};
 
 use crate::events::BotEvent;
-use crate::models::{Borrow, Supply, Repay, Withdraw, UserPosition};
+use crate::models::{Borrow, Repay, Supply, Withdraw};
 use crate::monitoring::scanner;
 
 const BLOCKS_TO_SCAN: u64 = 50000; // Scan last ~50k blocks (~7 days on Base)
@@ -53,7 +53,10 @@ where
     let num_chunks = (total_blocks + chunk_size - 1) / chunk_size; // Round up
 
     for (event_name, signature_hash) in event_types {
-        info!("🔎 Scanning for {} events in {} chunks...", event_name, num_chunks);
+        info!(
+            "🔎 Scanning for {} events in {} chunks...",
+            event_name, num_chunks
+        );
 
         for chunk_idx in 0..num_chunks {
             let chunk_from = from_block + (chunk_idx * chunk_size);
@@ -68,15 +71,23 @@ where
             match provider.get_logs(&filter).await {
                 Ok(logs) => {
                     if !logs.is_empty() {
-                        info!("Found {} {} events in chunk {}/{} (blocks {}-{})", 
-                              logs.len(), event_name, chunk_idx + 1, num_chunks, chunk_from, chunk_to);
+                        info!(
+                            "Found {} {} events in chunk {}/{} (blocks {}-{})",
+                            logs.len(),
+                            event_name,
+                            chunk_idx + 1,
+                            num_chunks,
+                            chunk_from,
+                            chunk_to
+                        );
                     }
-                    
+
                     for log in logs {
                         // Extract user address from log topics
-                        if let Some(user_address) = extract_user_address_from_log(&log, event_name) {
+                        if let Some(user_address) = extract_user_address_from_log(&log, event_name)
+                        {
                             discovered_users.insert(user_address);
-                            
+
                             // Stop if we've discovered enough users
                             if discovered_users.len() >= MAX_USERS_TO_PROCESS {
                                 warn!(
@@ -89,7 +100,13 @@ where
                     }
                 }
                 Err(e) => {
-                    error!("Failed to get {} events for chunk {}/{}: {}", event_name, chunk_idx + 1, num_chunks, e);
+                    error!(
+                        "Failed to get {} events for chunk {}/{}: {}",
+                        event_name,
+                        chunk_idx + 1,
+                        num_chunks,
+                        e
+                    );
                     // Continue with next chunk rather than failing completely
                     continue;
                 }
@@ -115,7 +132,7 @@ where
 
     // Now check health for each discovered user and populate the database
     info!("🏥 Checking health for discovered users...");
-    
+
     let mut processed_count = 0;
     let mut at_risk_count = 0;
 
@@ -148,7 +165,11 @@ where
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
                 if processed_count % 50 == 0 {
-                    info!("Processed {}/{} users...", processed_count, discovered_users.len());
+                    info!(
+                        "Processed {}/{} users...",
+                        processed_count,
+                        discovered_users.len()
+                    );
                 }
             }
             Err(e) => {
@@ -184,7 +205,7 @@ where
 /// Extract user address from event log based on event type
 fn extract_user_address_from_log(log: &alloy_rpc_types::Log, event_name: &str) -> Option<Address> {
     let topics = log.topics();
-    
+
     // Different events have user address in different topic positions
     match event_name {
         "Borrow" | "Supply" => {
@@ -231,15 +252,15 @@ fn format_health_factor(hf: U256) -> String {
 
 /// Alternative discovery method using subgraph (if available)
 pub async fn discover_users_via_subgraph(
-    subgraph_url: &str,
+    _subgraph_url: &str,
     _max_users: usize,
 ) -> Result<Vec<UserSubgraphData>> {
     info!("🌐 Attempting to discover users via subgraph...");
-    
+
     // Note: This is a placeholder for subgraph integration
     // The Graph's decentralized network requires an API key for most queries
     // For now, we'll return empty and rely on event scanning
-    
+
     warn!("Subgraph discovery not yet implemented - falling back to event scanning");
     Ok(Vec::new())
 }
