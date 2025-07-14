@@ -5,6 +5,7 @@ import {IFlashLoanReceiver} from "@aave/core-v3/contracts/flashloan/interfaces/I
 import {IPoolAddressesProvider} from "@aave/core-v3/contracts/interfaces/IPoolAddressesProvider.sol";
 import {IPool} from "@aave/core-v3/contracts/interfaces/IPool.sol";
 import {IL2Pool} from "@aave/core-v3/contracts/interfaces/IL2Pool.sol";
+import {IPoolDataProvider} from "@aave/core-v3/contracts/interfaces/IPoolDataProvider.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -23,6 +24,7 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
     address private immutable POOL_ADDRESS;
     address private immutable ADDRESSES_PROVIDER_ADDRESS;
     address private immutable SWAP_ROUTER;
+    address private immutable DATA_PROVIDER;
 
     /* Network Address Reference:
      * Base Mainnet:
@@ -82,6 +84,8 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         POOL_ADDRESS = _poolAddress;
         ADDRESSES_PROVIDER_ADDRESS = _addressesProviderAddress;
         SWAP_ROUTER = _swapRouter;
+        DATA_PROVIDER = IPoolAddressesProvider(_addressesProviderAddress)
+            .getPoolDataProvider();
     }
 
     // Required by IFlashLoanReceiver
@@ -134,11 +138,8 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         // Determine actual debt amount to cover
         uint256 actualDebtToCover = debtToCover;
         if (debtToCover == type(uint256).max) {
-            // Get user's total debt in the specific asset
-            (, uint256 totalDebtBase, , , , ) = IPool(POOL_ADDRESS)
-                .getUserAccountData(user);
-            // This is a simplified approach - in practice, you'd want to get the specific asset debt
-            actualDebtToCover = totalDebtBase / 2; // Conservative estimate for 50% liquidation
+            uint256 assetDebt = _getUserAssetDebt(debtAsset, user);
+            actualDebtToCover = assetDebt / 2;
         }
 
         // Request flash loan
@@ -266,6 +267,25 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         IL2Pool(POOL_ADDRESS).liquidationCall(args1, args2);
     }
 
+    /// @notice Retrieve total stable and variable debt for a user's asset
+    function _getUserAssetDebt(address asset, address user)
+        internal
+        view
+        returns (uint256)
+    {
+        (
+            ,
+            uint256 stableDebt,
+            uint256 variableDebt,
+            ,
+            ,
+            ,
+            ,
+            ,
+        ) = IPoolDataProvider(DATA_PROVIDER).getUserReserveData(asset, user);
+        return stableDebt + variableDebt;
+    }
+
     /**
      * @notice Swap collateral asset to debt asset using Uniswap V3
      * @param collateralAsset The asset to swap from
@@ -383,6 +403,13 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
      */
     function getAddressesProvider() external view returns (address) {
         return ADDRESSES_PROVIDER_ADDRESS;
+    }
+
+    /**
+     * @notice Get the Aave Protocol DataProvider address
+     */
+    function getDataProvider() external view returns (address) {
+        return DATA_PROVIDER;
     }
 
     // Allow contract to receive ETH
