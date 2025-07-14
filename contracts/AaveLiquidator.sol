@@ -84,8 +84,10 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         POOL_ADDRESS = _poolAddress;
         ADDRESSES_PROVIDER_ADDRESS = _addressesProviderAddress;
         SWAP_ROUTER = _swapRouter;
-        DATA_PROVIDER = IPoolAddressesProvider(_addressesProviderAddress)
+        address dataProvider = IPoolAddressesProvider(_addressesProviderAddress)
             .getPoolDataProvider();
+        require(dataProvider != address(0), "Invalid data provider");
+        DATA_PROVIDER = dataProvider;
     }
 
     // Required by IFlashLoanReceiver
