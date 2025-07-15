@@ -25,7 +25,9 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
     address private immutable SWAP_ROUTER;
     address private immutable DATA_PROVIDER;
 
-    uint256 public constant MAX_SLIPPAGE = 500;
+    uint256 public maxSlippage = 500; // 5% default, now configurable
+    uint256 public swapDeadlineBuffer = 300; // 5 minutes default, now configurable  
+    uint24 public defaultSwapFee = 3000; // 0.3% default fee tier, now configurable
     uint256 public minProfitThreshold = 5 * 1e8;
 
     struct LiquidationParams {
@@ -136,7 +138,7 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         uint256[] calldata premiums,
         address initiator,
         bytes calldata params
-    ) external override returns (bool) {
+    ) external override nonReentrant returns (bool) {
         require(msg.sender == POOL_ADDRESS, "Caller must be Aave Pool");
         require(initiator == address(this), "Invalid initiator");
 
@@ -183,19 +185,33 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
     }
 
     function _swapCollateralToDebt(address inToken, address outToken, uint256 amountIn) internal returns (uint256 amountOut) {
+        require(amountIn > 0, "Invalid swap amount");
+        require(inToken != outToken, "Same token swap not allowed");
+        
         IERC20(inToken).safeApprove(SWAP_ROUTER, amountIn);
-        uint256 amountOutMin = (amountIn * (10000 - MAX_SLIPPAGE)) / 10000;
+        
+        // Use configurable slippage protection instead of hardcoded value
+        uint256 amountOutMin = (amountIn * (10000 - maxSlippage)) / 10000;
+        
+        // Use configurable deadline buffer to prevent manipulation
+        uint256 deadline = block.timestamp + swapDeadlineBuffer;
+        require(deadline > block.timestamp, "Invalid deadline");
+        
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: inToken,
             tokenOut: outToken,
-            fee: 3000,
+            fee: defaultSwapFee, // Use configurable fee tier
             recipient: address(this),
-            deadline: block.timestamp + 300,
+            deadline: deadline,
             amountIn: amountIn,
             amountOutMinimum: amountOutMin,
             sqrtPriceLimitX96: 0
         });
+        
         amountOut = ISwapRouter(SWAP_ROUTER).exactInputSingle(params);
+        require(amountOut >= amountOutMin, "Slippage tolerance exceeded");
+        
+        // Clean up approval
         IERC20(inToken).safeApprove(SWAP_ROUTER, 0);
     }
 
@@ -218,6 +234,21 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
     }
 
     function setMinProfitThreshold(uint256 t) external onlyOwner { minProfitThreshold = t; }
+    
+    function setMaxSlippage(uint256 _maxSlippage) external onlyOwner {
+        require(_maxSlippage <= 2000, "Slippage too high"); // Max 20%
+        maxSlippage = _maxSlippage;
+    }
+    
+    function setSwapDeadlineBuffer(uint256 _deadlineBuffer) external onlyOwner {
+        require(_deadlineBuffer >= 60 && _deadlineBuffer <= 3600, "Invalid deadline buffer"); // 1 min to 1 hour
+        swapDeadlineBuffer = _deadlineBuffer;
+    }
+    
+    function setDefaultSwapFee(uint24 _fee) external onlyOwner {
+        require(_fee == 100 || _fee == 500 || _fee == 3000 || _fee == 10000, "Invalid fee tier");
+        defaultSwapFee = _fee;
+    }
     function emergencyApprove(address token, address spender, uint256 amt) external onlyOwner { IERC20(token).safeApprove(spender, amt); }
     function getPool() external view returns (address) { return POOL_ADDRESS; }
     function getSwapRouter() external view returns (address) { return SWAP_ROUTER; }
