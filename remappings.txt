@@ -1,8 +1,5 @@
-@aave/=node_modules/@aave/
-@ensdomains/=node_modules/@ensdomains/
-@ethereum-waffle/=node_modules/@ethereum-waffle/
-@openzeppelin/=node_modules/@openzeppelin/
-@uniswap/=node_modules/@uniswap/
-base64-sol/=node_modules/base64-sol/
-hardhat/=node_modules/hardhat/
 forge-std/=lib/forge-std/src/
+@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
+@aave/core-v3/=lib/protocol-v3/
+@uniswap/v3-periphery/=lib/v3-periphery/
+@uniswap/v3-core/=lib/v3-core/
