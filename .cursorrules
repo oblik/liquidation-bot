@@ -1,0 +1,155 @@
+# Liquidation Bot Project Rules
+
+This is an Aave v3 liquidation bot for Base network combining Rust backend with Solidity smart contracts.
+
+## Project Architecture
+
+### Core Technologies
+- **Rust Backend**: Modern alloy-rs ecosystem for Ethereum interaction, Tokio async runtime
+- **Solidity Contracts**: Foundry framework with OpenZeppelin and Aave V3 integration
+- **Database**: SQLx with SQLite/PostgreSQL for persistence
+- **Monitoring**: WebSocket-based real-time event listening
+- **Network**: Base L2 (Ethereum Layer 2) optimization
+
+### Key Components
+- `src/bot.rs` - Main bot orchestration with concurrent task management
+- `src/liquidation/` - Liquidation execution and profitability calculation
+- `src/monitoring/` - WebSocket event monitoring and user discovery
+- `contracts-foundry/AaveLiquidator.sol` - Flash loan liquidation contract
+- `src/database.rs` - SQLx database operations and schema management
+
+## Development Guidelines
+
+### Rust Code Style
+- Use `alloy-rs` ecosystem for all Ethereum interactions (Provider, Contract, Primitives)
+- Leverage `tokio` for async/await patterns and concurrent task spawning
+- Use `DashMap` for thread-safe concurrent data structures
+- Implement structured logging with `tracing` crate (info!, warn!, error!, debug!)
+- Handle errors with `eyre::Result` or `anyhow::Result` for better error context
+- Use `sqlx` with compile-time checked queries for database operations
+- Prefer `Arc<T>` for shared state across async tasks
+
+### Solidity Best Practices
+- Follow Foundry project structure with contracts in `contracts-foundry/`
+- Use OpenZeppelin contracts for security patterns (Ownable, ReentrancyGuard)
+- Implement flash loan receivers with proper Aave V3 interfaces
+- Optimize for Base L2 with L2Pool encoding where applicable
+- Include comprehensive error messages and custom errors
+- Add detailed NatSpec documentation for all public functions
+
+### Database Patterns
+- Use SQLx migrations for schema changes
+- Implement proper transaction handling for atomic operations
+- Store user positions, liquidation events, and monitoring logs
+- Use prepared statements with query! macro for compile-time verification
+- Handle connection pooling for concurrent database access
+
+### Async Architecture
+- Spawn separate tasks for monitoring, execution, and database operations
+- Use `mpsc` channels for communication between async tasks
+- Implement graceful shutdown handling with proper cleanup
+- Use `Arc<Mutex<T>>` or `DashMap` for shared mutable state
+- Avoid blocking operations in async contexts
+
+### Configuration Management
+- Use environment variables with `.env` file support via `dotenvy`
+- Implement comprehensive config validation in `BotConfig::from_env()`
+- Support both mainnet and testnet configurations
+- Include sensible defaults with override capabilities
+- Validate addresses, URLs, and numeric thresholds at startup
+
+### Error Handling & Logging
+- Log all significant events with appropriate levels (info for normal ops, warn for issues)
+- Include user addresses and transaction hashes in relevant log messages
+- Implement retry logic for transient failures (network, RPC timeouts)
+- Use structured logging with key-value pairs for better parsing
+- Handle WebSocket disconnections with automatic reconnection
+
+### Testing Strategy
+- Write unit tests for profitability calculations with realistic scenarios
+- Include integration tests for database operations
+- Test WebSocket event handling with mock providers
+- Verify smart contract interactions on testnets before mainnet
+- Use `cargo test -- --nocapture` for detailed test output
+
+### Security Considerations
+- Never log or expose private keys in any form
+- Validate all user inputs and external data
+- Use proper slippage protection in DEX swaps
+- Implement proper access controls in smart contracts
+- Handle potential reentrancy in contract interactions
+
+### Performance Optimization
+- Use connection pooling for database and RPC connections
+- Implement proper batching for multiple user checks
+- Cache frequently accessed data with appropriate TTL
+- Monitor gas costs and optimize transaction parameters
+- Use WebSocket subscriptions over HTTP polling when possible
+
+### Development Workflow
+- Use `cargo check` for fast compilation feedback
+- Run `cargo clippy` for linting and best practices
+- Format code with `cargo fmt` before commits
+- Use `forge test` for Solidity contract testing
+- Deploy contracts with `forge script` for reproducible deployments
+
+### Code Organization
+- Keep liquidation logic in `src/liquidation/` module
+- Separate monitoring concerns in `src/monitoring/` module
+- Use clear module boundaries with well-defined interfaces
+- Implement proper error types for different failure modes
+- Group related functionality in logical modules
+
+### External Integrations
+- Use Aave V3 Pool contract for liquidation operations
+- Integrate with Uniswap V3 for asset swaps
+- Monitor Chainlink price feeds for oracle data
+- Handle Base network specifics (2-second block times, L2 gas optimization)
+- Support multiple RPC providers for redundancy
+
+## Common Patterns
+
+### Event Monitoring
+```rust
+// Use WebSocket subscriptions for real-time monitoring
+let subscription = ws_provider
+    .subscribe_logs(filter)
+    .await?;
+
+while let Some(log) = subscription.into_stream().next().await {
+    // Process events concurrently
+    tokio::spawn(handle_event(log));
+}
+```
+
+### Database Operations
+```rust
+// Use compile-time checked queries
+let user_position = sqlx::query_as!(
+    UserPosition,
+    "SELECT * FROM user_positions WHERE user_address = ?",
+    user_address.to_string()
+)
+.fetch_optional(db_pool)
+.await?;
+```
+
+### Contract Interactions
+```rust
+// Use alloy contract instances for type-safe calls
+let health_factor = pool_contract
+    .getUserAccountData(user_address)
+    .call()
+    .await?
+    .healthFactor;
+```
+
+### Profitability Calculations
+```rust
+// Include all costs: gas, fees, slippage
+let total_cost = gas_cost + flash_loan_fee + swap_slippage;
+let net_profit = liquidation_bonus.saturating_sub(total_cost);
+let is_profitable = net_profit >= min_profit_threshold;
+```
+
+Always prioritize safety, performance, and maintainability in this high-frequency trading environment.
