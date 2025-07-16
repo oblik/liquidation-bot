@@ -133,14 +133,14 @@ where
         Ok(Some(position)) => {
             debug!("✅ Found user position in database for liquidation opportunity");
             position
-        },
+        }
         Ok(None) => {
             warn!("User position not found in database: {:?}", user);
-            
+
             // Debug: Check how many total users are in the database
             match sqlx::query!("SELECT COUNT(*) as count FROM user_positions")
                 .fetch_one(db_pool)
-                .await 
+                .await
             {
                 Ok(row) => {
                     warn!("📊 Total users in database: {}", row.count);
@@ -149,7 +149,7 @@ where
                     error!("Failed to count database users: {}", e);
                 }
             }
-            
+
             return Ok(());
         }
         Err(e) => {
@@ -174,7 +174,10 @@ where
 
     // Validate that user has both collateral and debt
     if user_collateral_assets.is_empty() {
-        warn!("User {:?} has no collateral assets - cannot liquidate", user);
+        warn!(
+            "User {:?} has no collateral assets - cannot liquidate",
+            user
+        );
         return Ok(());
     }
 
@@ -240,9 +243,13 @@ where
     // Execute liquidation if we have the necessary components
     match (liquidator_contract_address, signer) {
         (Some(contract_addr), Some(signer)) => {
-            // Create liquidation executor
-            let executor =
-                executor::LiquidationExecutor::new(provider.clone(), signer, contract_addr)?;
+            // Create liquidation executor with asset configurations
+            let executor = executor::LiquidationExecutor::new(
+                provider.clone(),
+                signer,
+                contract_addr,
+                asset_configs.clone(),
+            )?;
 
             // Verify contract setup
             if let Err(e) = executor.verify_contract_setup().await {
@@ -315,13 +322,19 @@ async fn get_user_position_from_db(
     user: Address,
 ) -> Result<Option<UserPosition>> {
     let user_str = user.to_string();
-    
-    debug!("🔍 Looking up user in database: {} (formatted as: {})", user, user_str);
+
+    debug!(
+        "🔍 Looking up user in database: {} (formatted as: {})",
+        user, user_str
+    );
 
     // Try case-insensitive lookup to handle any format mismatches
-    let row = sqlx::query!("SELECT * FROM user_positions WHERE LOWER(address) = LOWER(?)", user_str)
-        .fetch_optional(db_pool)
-        .await?;
+    let row = sqlx::query!(
+        "SELECT * FROM user_positions WHERE LOWER(address) = LOWER(?)",
+        user_str
+    )
+    .fetch_optional(db_pool)
+    .await?;
 
     if let Some(row) = row {
         debug!("✅ Found user position in database: {}", user_str);

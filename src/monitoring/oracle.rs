@@ -66,6 +66,30 @@ pub fn init_asset_configs() -> HashMap<Address, AssetConfig> {
         }
     }
 
+    // cbETH - Base mainnet configuration (using ETH/USD feed as proxy since cbETH ≈ ETH)
+    match (
+        "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22".parse::<Address>(),
+        "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70".parse::<Address>(), // ETH/USD feed on Base mainnet
+    ) {
+        (Ok(cbeth_address), Ok(cbeth_feed_address)) => {
+            configs.insert(
+                cbeth_address,
+                AssetConfig {
+                    address: cbeth_address,
+                    symbol: "cbETH".to_string(),
+                    chainlink_feed: cbeth_feed_address, // Using ETH/USD as proxy for cbETH
+                    price_change_threshold: 0.005,      // 0.5% price change threshold (same as ETH)
+                },
+            );
+        }
+        (Err(e), _) => {
+            error!("Failed to parse cbETH address: {}", e);
+        }
+        (_, Err(e)) => {
+            error!("Failed to parse cbETH chainlink feed address: {}", e);
+        }
+    }
+
     info!(
         "Initialized {} asset configuration(s) for oracle monitoring",
         configs.len()

@@ -8,7 +8,8 @@ use std::hash::Hasher;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use crate::models::{LiquidationOpportunity, LiquidationParams};
+use crate::models::{LiquidationAssetConfig, LiquidationOpportunity, LiquidationParams};
+use std::collections::HashMap;
 
 /// Liquidation executor that interfaces with the deployed smart contract
 pub struct LiquidationExecutor<P> {
@@ -16,6 +17,7 @@ pub struct LiquidationExecutor<P> {
     signer: PrivateKeySigner,
     liquidator_contract: ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     contract_address: Address,
+    asset_configs: HashMap<Address, LiquidationAssetConfig>,
 }
 
 impl<P> LiquidationExecutor<P>
@@ -27,6 +29,7 @@ where
         provider: Arc<P>,
         signer: PrivateKeySigner,
         contract_address: Address,
+        asset_configs: HashMap<Address, LiquidationAssetConfig>,
     ) -> Result<Self> {
         // Load the ABI from deployment info or hardcoded
         let liquidator_abi = get_liquidator_abi()?;
@@ -38,6 +41,7 @@ where
             signer,
             liquidator_contract,
             contract_address,
+            asset_configs,
         })
     }
 
@@ -168,22 +172,34 @@ where
         Err(eyre::eyre!("Transaction confirmation timeout"))
     }
 
-    /// Get asset ID for L2Pool encoding - uses direct address comparison for reliability
+    /// Get asset ID for L2Pool encoding - uses manually configured asset mappings
     fn get_asset_id(&self, asset_address: Address) -> Result<u16> {
-        // Use direct address comparison for Base mainnet assets
-        let weth_addr: Address = "0x4200000000000000000000000000000000000006".parse()?;
-        let usdc_addr: Address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".parse()?; // Base mainnet USDC
-        let cbeth_addr: Address = "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22".parse()?;
-
-        if asset_address == weth_addr {
-            Ok(0) // WETH
-        } else if asset_address == usdc_addr {
-            Ok(1) // USDC
-        } else if asset_address == cbeth_addr {
-            Ok(2) // cbETH
-        } else {
-            error!("Unknown asset address: {:#x}", asset_address);
-            Err(eyre::eyre!("Unknown asset address: {:#x}", asset_address))
+        // Look up asset in the manually configured asset configs
+        match self.asset_configs.get(&asset_address) {
+            Some(config) => {
+                info!(
+                    "✅ Found asset configuration for {}: {} (ID: {})",
+                    asset_address, config.symbol, config.asset_id
+                );
+                Ok(config.asset_id)
+            }
+            None => {
+                error!("❌ Asset {} not found in configuration", asset_address);
+                error!(
+                    "📋 Available assets: {:?}",
+                    self.asset_configs
+                        .iter()
+                        .map(|(addr, config)| format!(
+                            "{}: {} (ID: {})",
+                            addr, config.symbol, config.asset_id
+                        ))
+                        .collect::<Vec<_>>()
+                );
+                Err(eyre::eyre!(
+                    "Asset {} not in approved asset list. Add it to your asset configuration if you want to support it.",
+                    asset_address
+                ))
+            }
         }
     }
 
