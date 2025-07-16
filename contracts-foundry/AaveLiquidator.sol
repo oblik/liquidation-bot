@@ -25,7 +25,9 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
     address private immutable SWAP_ROUTER;
     address private immutable DATA_PROVIDER;
 
-    uint256 public constant MAX_SLIPPAGE = 500;
+    uint256 public maxSlippage = 500; // 5% default, now configurable
+    uint256 public swapDeadlineBuffer = 300; // 5 minutes default, now configurable
+    uint24 public defaultSwapFee = 3000; // 0.3% default fee tier, now configurable
     uint256 public minProfitThreshold = 5 * 1e8;
 
     struct LiquidationParams {
@@ -136,7 +138,7 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         uint256[] calldata premiums,
         address initiator,
         bytes calldata params
-    ) external override returns (bool) {
+    ) external override nonReentrant returns (bool) {
         require(msg.sender == POOL_ADDRESS, "Caller must be Aave Pool");
         require(initiator == address(this), "Invalid initiator");
 
@@ -148,7 +150,9 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         IERC20(debtAsset).safeApprove(POOL_ADDRESS, amount);
         _executeLiquidation(p, amount);
 
-        uint256 collateralBalance = IERC20(p.collateralAsset).balanceOf(address(this));
+        uint256 collateralBalance = IERC20(p.collateralAsset).balanceOf(
+            address(this)
+        );
         uint256 debtAssetBalance = IERC20(debtAsset).balanceOf(address(this));
         if (p.collateralAsset != debtAsset && collateralBalance > 0) {
             debtAssetBalance += _swapCollateralToDebt(
@@ -163,43 +167,91 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         IERC20(debtAsset).safeApprove(POOL_ADDRESS, totalRepay);
 
         uint256 profit = debtAssetBalance - totalRepay;
-        emit LiquidationExecuted(p.user, p.collateralAsset, debtAsset, amount, collateralBalance, profit);
+        emit LiquidationExecuted(
+            p.user,
+            p.collateralAsset,
+            debtAsset,
+            amount,
+            collateralBalance,
+            profit
+        );
         return true;
     }
 
-    function _executeLiquidation(LiquidationParams memory p, uint256 debtToCover) internal {
+    function _executeLiquidation(
+        LiquidationParams memory p,
+        uint256 debtToCover
+    ) internal {
         bytes32 args1 = bytes32(
             (uint256(p.collateralAssetId) << 240) |
-            (uint256(p.debtAssetId) << 224) |
-            uint256(uint160(p.user))
+                (uint256(p.debtAssetId) << 224) |
+                uint256(uint160(p.user))
         );
-        bytes32 args2 = bytes32((debtToCover << 128) | (p.receiveAToken ? 1 : 0));
+        bytes32 args2 = bytes32(
+            (debtToCover << 128) | (p.receiveAToken ? 1 : 0)
+        );
         IL2Pool(POOL_ADDRESS).liquidationCall(args1, args2);
     }
 
-    function _getUserAssetDebt(address asset, address user) internal view returns (uint256) {
-        (, uint256 stableDebt, uint256 variableDebt, , , , , , ) = IPoolDataProvider(DATA_PROVIDER).getUserReserveData(asset, user);
+    function _getUserAssetDebt(
+        address asset,
+        address user
+    ) internal view returns (uint256) {
+        (
+            ,
+            uint256 stableDebt,
+            uint256 variableDebt,
+            ,
+            ,
+            ,
+            ,
+            ,
+
+        ) = IPoolDataProvider(DATA_PROVIDER).getUserReserveData(asset, user);
         return stableDebt + variableDebt;
     }
 
-    function _swapCollateralToDebt(address inToken, address outToken, uint256 amountIn) internal returns (uint256 amountOut) {
+    function _swapCollateralToDebt(
+        address inToken,
+        address outToken,
+        uint256 amountIn
+    ) internal returns (uint256 amountOut) {
+        require(amountIn > 0, "Invalid swap amount");
+        require(inToken != outToken, "Same token swap not allowed");
+
         IERC20(inToken).safeApprove(SWAP_ROUTER, amountIn);
-        uint256 amountOutMin = (amountIn * (10000 - MAX_SLIPPAGE)) / 10000;
-        ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
-            tokenIn: inToken,
-            tokenOut: outToken,
-            fee: 3000,
-            recipient: address(this),
-            deadline: block.timestamp + 300,
-            amountIn: amountIn,
-            amountOutMinimum: amountOutMin,
-            sqrtPriceLimitX96: 0
-        });
+
+        // Use configurable slippage protection instead of hardcoded value
+        uint256 amountOutMin = (amountIn * (10000 - maxSlippage)) / 10000;
+
+        // Use configurable deadline buffer to prevent manipulation
+        uint256 deadline = block.timestamp + swapDeadlineBuffer;
+        require(deadline > block.timestamp, "Invalid deadline");
+
+        ISwapRouter.ExactInputSingleParams memory params = ISwapRouter
+            .ExactInputSingleParams({
+                tokenIn: inToken,
+                tokenOut: outToken,
+                fee: defaultSwapFee, // Use configurable fee tier
+                recipient: address(this),
+                deadline: deadline,
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMin,
+                sqrtPriceLimitX96: 0
+            });
+
         amountOut = ISwapRouter(SWAP_ROUTER).exactInputSingle(params);
+        require(amountOut >= amountOutMin, "Slippage tolerance exceeded");
+
+        // Clean up approval
         IERC20(inToken).safeApprove(SWAP_ROUTER, 0);
     }
 
-    function withdraw(address asset, uint256 amount, address to) external onlyOwner {
+    function withdraw(
+        address asset,
+        uint256 amount,
+        address to
+    ) external onlyOwner {
         require(to != address(0), "Invalid recipient");
         uint256 bal = IERC20(asset).balanceOf(address(this));
         uint256 w = amount == 0 ? bal : amount;
@@ -212,17 +264,59 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         require(to != address(0), "Invalid recipient");
         uint256 b = address(this).balance;
         require(b > 0, "No ETH");
-        (bool s,) = to.call{value: b}("");
+        (bool s, ) = to.call{value: b}("");
         require(s, "ETH transfer failed");
         emit ProfitWithdrawn(address(0), b, to);
     }
 
-    function setMinProfitThreshold(uint256 t) external onlyOwner { minProfitThreshold = t; }
-    function emergencyApprove(address token, address spender, uint256 amt) external onlyOwner { IERC20(token).safeApprove(spender, amt); }
-    function getPool() external view returns (address) { return POOL_ADDRESS; }
-    function getSwapRouter() external view returns (address) { return SWAP_ROUTER; }
-    function getAddressesProvider() external view returns (address) { return ADDRESSES_PROVIDER_ADDRESS; }
-    function getDataProvider() external view returns (address) { return DATA_PROVIDER; }
+    function setMinProfitThreshold(uint256 t) external onlyOwner {
+        minProfitThreshold = t;
+    }
+
+    function setMaxSlippage(uint256 _maxSlippage) external onlyOwner {
+        require(_maxSlippage <= 2000, "Slippage too high"); // Max 20%
+        maxSlippage = _maxSlippage;
+    }
+
+    function setSwapDeadlineBuffer(uint256 _deadlineBuffer) external onlyOwner {
+        require(
+            _deadlineBuffer >= 60 && _deadlineBuffer <= 3600,
+            "Invalid deadline buffer"
+        ); // 1 min to 1 hour
+        swapDeadlineBuffer = _deadlineBuffer;
+    }
+
+    function setDefaultSwapFee(uint24 _fee) external onlyOwner {
+        require(
+            _fee == 100 || _fee == 500 || _fee == 3000 || _fee == 10000,
+            "Invalid fee tier"
+        );
+        defaultSwapFee = _fee;
+    }
+
+    function emergencyApprove(
+        address token,
+        address spender,
+        uint256 amt
+    ) external onlyOwner {
+        IERC20(token).safeApprove(spender, amt);
+    }
+
+    function getPool() external view returns (address) {
+        return POOL_ADDRESS;
+    }
+
+    function getSwapRouter() external view returns (address) {
+        return SWAP_ROUTER;
+    }
+
+    function getAddressesProvider() external view returns (address) {
+        return ADDRESSES_PROVIDER_ADDRESS;
+    }
+
+    function getDataProvider() external view returns (address) {
+        return DATA_PROVIDER;
+    }
 
     receive() external payable {}
 }

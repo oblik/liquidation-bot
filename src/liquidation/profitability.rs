@@ -100,22 +100,35 @@ where
 /// Calculate maximum debt that can be covered (50% of total debt)
 fn calculate_max_debt_to_cover(total_debt_base: U256) -> U256 {
     // Aave allows up to 50% of debt to be liquidated in a single transaction
-    total_debt_base * U256::from(MAX_LIQUIDATION_CLOSE_FACTOR) / U256::from(10000)
+    // Use saturating arithmetic to prevent overflow and ensure safe division
+    if total_debt_base.is_zero() {
+        return U256::ZERO;
+    }
+    total_debt_base.saturating_mul(U256::from(MAX_LIQUIDATION_CLOSE_FACTOR)) / U256::from(10000)
 }
 
 /// Calculate expected collateral received including liquidation bonus
 fn calculate_collateral_received(debt_to_cover: U256, liquidation_bonus_bps: u16) -> (U256, U256) {
     // Collateral received = debt_to_cover * (1 + liquidation_bonus)
-    let bonus_multiplier = U256::from(10000 + liquidation_bonus_bps);
-    let collateral_received = debt_to_cover * bonus_multiplier / U256::from(10000);
-    let bonus_amount = collateral_received - debt_to_cover;
+    // Use saturating arithmetic to prevent overflow and ensure safe operations
+    if debt_to_cover.is_zero() {
+        return (U256::ZERO, U256::ZERO);
+    }
+
+    let bonus_multiplier = U256::from(10000_u16.saturating_add(liquidation_bonus_bps));
+    let collateral_received = debt_to_cover.saturating_mul(bonus_multiplier) / U256::from(10000);
+    let bonus_amount = collateral_received.saturating_sub(debt_to_cover);
 
     (collateral_received, bonus_amount)
 }
 
 /// Calculate Aave flash loan fee (0.05%)
 fn calculate_flash_loan_fee(amount: U256) -> U256 {
-    amount * U256::from(FLASH_LOAN_FEE_BPS) / U256::from(10000)
+    // Use saturating arithmetic to prevent overflow
+    if amount.is_zero() {
+        return U256::ZERO;
+    }
+    amount.saturating_mul(U256::from(FLASH_LOAN_FEE_BPS)) / U256::from(10000)
 }
 
 /// Estimate gas cost for liquidation transaction
@@ -135,10 +148,10 @@ where
     // Estimate gas limit based on typical liquidation transaction
     let gas_limit = U256::from(BASE_GAS_LIMIT);
 
-    // Calculate total cost with a 20% buffer for priority fee
-    let priority_fee = gas_price * U256::from(20) / U256::from(100);
-    let total_gas_price = gas_price + priority_fee;
-    let total_cost = gas_limit * total_gas_price;
+    // Calculate total cost with a 20% buffer for priority fee using saturating arithmetic to prevent overflow
+    let priority_fee = gas_price.saturating_mul(U256::from(20)) / U256::from(100);
+    let total_gas_price = gas_price.saturating_add(priority_fee);
+    let total_cost = gas_limit.saturating_mul(total_gas_price);
 
     debug!(
         "Gas estimate: base_fee={} wei, priority_fee={} wei, limit={}, total_cost={} wei",
