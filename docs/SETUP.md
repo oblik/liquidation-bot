@@ -6,7 +6,7 @@ This guide provides detailed instructions for installing, configuring, and runni
 
 ### System Requirements
 - **Rust**: Version 1.70 or higher
-- **Node.js**: Version 16+ with npm
+- **Foundry**: Latest version for smart contract development
 - **Operating System**: Linux, macOS, or Windows (WSL recommended)
 - **Memory**: Minimum 2GB RAM, 4GB+ recommended for production
 - **Storage**: 1GB free space for dependencies and database
@@ -37,13 +37,15 @@ cargo build --release
 cargo check
 ```
 
-### 3. Install Node.js Dependencies
+### 3. Install Foundry
 ```bash
-# Install packages for smart contract management
-npm install
+# Install Foundry if not already installed
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
 
-# Verify foundry is available (for contract compilation)
-npx hardhat --version
+# Verify Foundry installation
+forge --version
+cast --version
 ```
 
 ### 4. Initialize Database
@@ -52,6 +54,8 @@ npx hardhat --version
 # For PostgreSQL, ensure the database exists first
 createdb liquidation_bot  # If using PostgreSQL
 ```
+
+⚠️ **Important**: This bot operates on Base mainnet for all environments. Ensure you have sufficient ETH for gas fees and use appropriate profit thresholds for testing.
 
 ## ⚙️ Configuration
 
@@ -124,22 +128,13 @@ RUST_LOG=info
 
 ### Network-Specific Configuration
 
-#### Base Mainnet (Production)
+#### Base Mainnet (Production & Development)
 ```bash
 RPC_URL=https://mainnet.base.org
 WS_URL=wss://mainnet.base.org
-# Or use a dedicated provider:
+# Or use a dedicated provider (recommended):
 # RPC_URL=https://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
 # WS_URL=wss://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
-```
-
-#### Base Sepolia (Testing)
-```bash
-RPC_URL=https://sepolia.base.org
-WS_URL=wss://sepolia.base.org
-# Or use a dedicated provider:
-# RPC_URL=https://base-sepolia.g.alchemy.com/v2/YOUR_API_KEY  
-# WS_URL=wss://base-sepolia.g.alchemy.com/v2/YOUR_API_KEY
 ```
 
 ### Database Setup
@@ -166,30 +161,50 @@ DATABASE_URL=postgresql://liquidation_user:password@localhost/liquidation_bot
 
 ## 🚀 Smart Contract Deployment
 
-### 1. Configure Network
-The deployment script automatically detects the network based on your RPC URL.
+### 1. Set Environment Variables
+Ensure your `.env` file has the required variables:
+```bash
+RPC_URL=https://mainnet.base.org
+PRIVATE_KEY=0x...
+```
 
 ### 2. Compile Contracts
 ```bash
-npm run compile
+forge build
 ```
 
-### 3. Deploy to Network
+### 3. Deploy to Base Mainnet
 ```bash
-# Deploy to current network (detected from RPC_URL)
-npm run deploy
+# Deploy with verification
+forge script script/Deploy.s.sol \
+  --rpc-url $RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast \
+  --verify
 
-# Deploy to specific network
-npm run deploy -- --network base
-npm run deploy -- --network base-sepolia
+# Or deploy without verification
+forge script script/Deploy.s.sol \
+  --rpc-url $RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast
 ```
 
 ### 4. Verify Deployment
 After deployment, you'll see output like:
 ```
+== Logs ==
+Deploying AaveLiquidator...
 AaveLiquidator deployed to: 0x1234567890123456789012345678901234567890
 Pool Address: 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5
 Swap Router: 0x2626664c2603336E57B271c5C0b26F421741e481
+
+## Setting up 1 EVM.
+==========================
+Chain 8453
+
+Estimated gas price: 0.001000007 gwei
+Estimated total gas used for script: 2841234
+==========================
 ```
 
 Update your `.env` file with the contract address:
@@ -250,8 +265,13 @@ curl -X POST $RPC_URL \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 
-# Test WebSocket (requires wscat: npm install -g wscat)
-wscat -c $WS_URL
+# Test WebSocket (optional - requires wscat: npm install -g wscat)
+# wscat -c $WS_URL
+
+# Alternative: Test with curl (HTTP endpoint)
+curl -X POST $RPC_URL \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"net_version","params":[],"id":1}'
 ```
 
 ### 3. Check Bot Health

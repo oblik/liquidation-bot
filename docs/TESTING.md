@@ -269,12 +269,14 @@ DATABASE_URL=postgresql://test:test@localhost/test_db cargo test database::integ
 
 ### Network Integration Tests
 
-Test against real blockchain networks (testnet only):
+Test against real blockchain networks:
 
 ```bash
-# Requires testnet RPC access
-RPC_URL=https://sepolia.base.org cargo test network::integration::tests
+# Requires mainnet RPC access
+RPC_URL=https://mainnet.base.org cargo test network::integration::tests
 ```
+
+⚠️ **Important**: These tests run on Base mainnet. Ensure you have sufficient ETH for gas fees and use appropriate test parameters.
 
 ## 📈 Performance Testing
 
@@ -501,9 +503,9 @@ Create separate test configurations:
 
 ```bash
 # test.env
-RPC_URL=https://sepolia.base.org
-WS_URL=wss://sepolia.base.org
-PRIVATE_KEY=0x1234567890abcdef... # Test key with minimal funds
+RPC_URL=https://mainnet.base.org
+WS_URL=wss://mainnet.base.org
+PRIVATE_KEY=0x1234567890abcdef... # Development key with sufficient ETH for testing
 DATABASE_URL=sqlite::memory:
 MIN_PROFIT_THRESHOLD=1000000000000000 # 0.001 ETH for testing
 RUST_LOG=debug

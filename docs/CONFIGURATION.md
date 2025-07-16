@@ -7,15 +7,11 @@ Complete guide to configuring the Aave v3 Liquidation Bot environment variables,
 ### Network Configuration
 
 ```bash
-# Base Mainnet (Production)
+# Base Mainnet (Production & Development)
 RPC_URL=https://mainnet.base.org
 WS_URL=wss://mainnet.base.org
 
-# Base Sepolia (Testing)  
-RPC_URL=https://sepolia.base.org
-WS_URL=wss://sepolia.base.org
-
-# Dedicated Providers (Recommended)
+# Dedicated Providers (Recommended for all environments)
 RPC_URL=https://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
 WS_URL=wss://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
 ```
@@ -50,8 +46,8 @@ LIQUIDATOR_CONTRACT=0x1234567890123456789012345678901234567890
 
 **Notes:**
 - Contract must be deployed before running liquidations
-- Use deployment script: `npm run deploy`
-- Different addresses for mainnet vs testnet
+- Use Foundry deployment: `forge script script/Deploy.s.sol --broadcast`
+- Single contract deployment on Base mainnet for all environments
 
 ### Database Configuration
 
@@ -108,22 +104,22 @@ RUST_LOG=liquidation_bot=debug,sqlx=warn
 
 ## 📋 Configuration Examples
 
-### Development Setup (Base Sepolia)
+### Development Setup (Base Mainnet)
 
 ```bash
 # Network
-RPC_URL=https://sepolia.base.org
-WS_URL=wss://sepolia.base.org
+RPC_URL=https://mainnet.base.org
+WS_URL=wss://mainnet.base.org
 
 # Security
-PRIVATE_KEY=0x...your_test_private_key
+PRIVATE_KEY=0x...your_development_private_key
 
 # Contract
-LIQUIDATOR_CONTRACT=0x...your_sepolia_contract
+LIQUIDATOR_CONTRACT=0x...your_mainnet_contract
 
 # Behavior
-MIN_PROFIT_THRESHOLD=1000000000000000    # 0.001 ETH for testing
-HEALTH_FACTOR_THRESHOLD=1200000000000000000  # 1.2 for safer testing
+MIN_PROFIT_THRESHOLD=1000000000000000    # 0.001 ETH for development
+HEALTH_FACTOR_THRESHOLD=1200000000000000000  # 1.2 for safer development
 GAS_PRICE_MULTIPLIER=2
 MONITORING_INTERVAL_SECS=10
 
@@ -181,13 +177,7 @@ RUST_LOG=warn                           # Minimal logging overhead
 - **Block Time**: ~2 seconds
 - **Currency**: ETH
 
-### Base Sepolia Testnet  
-- **Chain ID**: 84532
-- **RPC URL**: `https://sepolia.base.org`
-- **WebSocket**: `wss://sepolia.base.org`
-- **Aave Pool**: `0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b`
-- **Block Time**: ~2 seconds
-- **Faucet**: Available through Base Discord
+**Note**: All development and testing is performed on Base mainnet. Use appropriate profit thresholds and monitoring intervals for your development environment.
 
 ## 🎛️ Advanced Configuration
 

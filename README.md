@@ -8,23 +8,28 @@ A production-ready Aave v3 liquidation bot for Base network, built with Rust and
 - **💰 Profitability Engine**: Advanced profit calculations including gas, fees, and slippage
 - **⚡ Flash Loan Liquidations**: Atomic liquidations via deployed smart contract
 - **📊 Database Persistence**: SQLite/PostgreSQL support for position tracking
-- **🔧 Multi-Network Support**: Base mainnet and Sepolia testnet ready
+- **🔧 Base Mainnet Optimized**: Fully optimized for Base network with L2Pool integration
 - **🛡️ Production Hardened**: Comprehensive error handling and recovery mechanisms
 
 ## 📋 Quick Start
 
 ### Prerequisites
 - Rust 1.70+
-- Node.js and npm (for smart contracts)
-- Base network RPC access (HTTP + WebSocket)
-- Private key with ETH for gas fees
+- Foundry (for smart contract development)
+- Base mainnet RPC access (HTTP + WebSocket)
+- Private key with sufficient ETH for gas fees
+
+⚠️ **Important**: This bot operates exclusively on Base mainnet for all environments including development and testing.
 
 ### 1. Installation
 ```bash
 git clone <repository>
 cd liquidation-bot
 cargo build --release
-npm install
+
+# Install Foundry if not already installed
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
 ```
 
 ### 2. Configuration
@@ -46,8 +51,11 @@ RUST_LOG=info
 
 ### 3. Deploy Smart Contract (if needed)
 ```bash
-npm run compile
-npm run deploy  # Automatically detects network
+# Compile contracts
+forge build
+
+# Deploy to Base mainnet
+forge script script/Deploy.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast --verify
 ```
 
 ### 4. Run the Bot
@@ -118,7 +126,6 @@ Example test output shows real profitability logic considering liquidation bonus
 | Network | Chain ID | Status | Aave Pool Address |
 |---------|----------|--------|-------------------|
 | Base Mainnet | 8453 | ✅ Production | `0xA238Dd80C259a72e81d7e4664a9801593F98d1c5` |
-| Base Sepolia | 84532 | ✅ Testnet | `0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b` |
 
 ## 📚 Documentation
 

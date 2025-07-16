@@ -498,4 +498,4 @@ CMD ["./target/release/liquidation-bot"]
 - **Backup Strategy** → Automated database backups
 - **Monitoring Integration** → Prometheus/Grafana dashboards
 
-This architecture provides a robust, scalable, and maintainable foundation for automated liquidation operations on the Aave v3 protocol.
+This architecture provides a robust, scalable, and maintainable foundation for automated liquidation operations on the Aave v3 protocol.x

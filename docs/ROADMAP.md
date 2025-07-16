@@ -15,7 +15,7 @@ This document outlines the development status, completed features, and future pl
 ### Smart Contract Development
 - [x] **AaveLiquidator.sol**: Flash loan liquidation contract with L2Pool optimization
 - [x] **Security Features**: Reentrancy guards, owner-only functions, slippage protection  
-- [x] **Multi-Network Deployment**: Configurable addresses for Base mainnet and Sepolia
+- [x] **Mainnet Deployment**: Configurable addresses for Base mainnet
 - [x] **Gas Optimization**: L2Pool encoding for 60%+ gas savings
 - [x] **Integration**: Aave V3, Uniswap V3, and Chainlink compatibility
 
