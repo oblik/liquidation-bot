@@ -116,7 +116,7 @@ fn main() -> eyre::Result<()> {
     let weth = create_weth_config();
     let usdc = create_usdc_config();
     let gas_estimate = create_gas_estimate(10); // 10 gwei
-    let min_profit = U256::from_str("1000000000000000000")?; // 1 ETH minimum
+    let min_profit = U256::from_str("10000000000000000")?; // 0.01 ETH minimum
 
     let opportunity = simulate_liquidation(&user_position, &weth, &usdc, &gas_estimate, min_profit);
 
@@ -227,7 +227,7 @@ fn main() -> eyre::Result<()> {
     };
 
     let realistic_gas = create_gas_estimate(25); // 25 gwei
-    let lower_threshold = U256::from_str("500000000000000000")?; // 0.5 ETH minimum
+    let lower_threshold = U256::from_str("5000000000000000")?; // 0.005 ETH minimum
 
     let opportunity3 = simulate_liquidation(
         &realistic_position,
