@@ -273,8 +273,8 @@ function liquidate(
     address debtAsset,
     uint256 debtToCover,
     bool receiveAToken,
-    uint256 collateralAssetId,
-    uint256 debtAssetId
+    uint16 collateralAssetId,
+    uint16 debtAssetId
 ) external onlyOwner nonReentrant
 ```
 
@@ -309,14 +309,16 @@ function executeOperation(
 The contract uses Aave's L2Pool for optimized liquidations:
 
 ```solidity
-// L2Pool encoding saves gas by using asset IDs instead of addresses
-IL2Pool(POOL_ADDRESS).liquidationCall(
-    collateralAssetId,  // uint16 instead of address
-    debtAssetId,        // uint16 instead of address  
-    user,
-    debtToCover,
-    receiveAToken
+// L2Pool encoding saves gas by using packed bytes32 arguments
+bytes32 args1 = bytes32(
+    (uint256(collateralAssetId) << 240) |
+        (uint256(debtAssetId) << 224) |
+        uint256(uint160(user))
 );
+bytes32 args2 = bytes32(
+    (debtToCover << 128) | (receiveAToken ? 1 : 0)
+);
+IL2Pool(POOL_ADDRESS).liquidationCall(args1, args2);
 ```
 
 **Gas Savings:**

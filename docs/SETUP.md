@@ -95,7 +95,7 @@ MIN_PROFIT_THRESHOLD=10000000000000000
 # Health factor threshold for "at risk" detection (default: 1.1)
 HEALTH_FACTOR_THRESHOLD=1100000000000000000
 
-# Gas price multiplier for competitive bidding (default: 2.0)
+# Gas price multiplier for competitive bidding (default: 2)
 GAS_PRICE_MULTIPLIER=2
 
 # ===========================================

@@ -70,7 +70,7 @@ DATABASE_URL=postgresql://username:password@localhost/liquidation_bot
 # Minimum profit threshold in wei (default: 0.01 ETH)
 MIN_PROFIT_THRESHOLD=10000000000000000
 
-# Gas price multiplier for transaction priority (default: 2.0)
+# Gas price multiplier for transaction priority (default: 2)
 GAS_PRICE_MULTIPLIER=2
 
 # Health factor threshold for "at risk" alerts (default: 1.1)
@@ -82,7 +82,7 @@ MONITORING_INTERVAL_SECS=5
 
 **Parameter Explanations:**
 - `MIN_PROFIT_THRESHOLD`: Minimum expected profit before executing liquidation
-- `GAS_PRICE_MULTIPLIER`: Multiplier for competitive gas pricing (1.0 = market rate)
+- `GAS_PRICE_MULTIPLIER`: Multiplier for competitive gas pricing (1 = market rate)
 - `HEALTH_FACTOR_THRESHOLD`: Health factor below which users are flagged as "at risk"
 - `MONITORING_INTERVAL_SECS`: How often to perform periodic health checks
 
