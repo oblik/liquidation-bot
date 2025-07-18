@@ -93,8 +93,8 @@ let pool_addr: Address = "0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b".parse()?;
 
 ### **Solution Implemented**
 1. **Made contract addresses configurable** via constructor parameters
-2. **Updated deployment script** to automatically select correct addresses per network
-3. **Added comprehensive address documentation**
+2. **Updated deployment script** to use hardcoded Base mainnet addresses
+3. **Simplified deployment process** for single-network deployment
 
 **Fixed contract code:**
 ```solidity
@@ -105,57 +105,51 @@ address private immutable SWAP_ROUTER;
 
 constructor(
     address _poolAddress,
-    address _addressesProvider,
+    address _addressesProviderAddress,
     address _swapRouter
 ) Ownable() {
     require(_poolAddress != address(0), "Invalid pool address");
-    require(_addressesProvider != address(0), "Invalid addresses provider");
+    require(_addressesProviderAddress != address(0), "Invalid addresses provider");
     require(_swapRouter != address(0), "Invalid swap router address");
     
     POOL_ADDRESS = _poolAddress;
-    ADDRESSES_PROVIDER_ADDRESS = _addressesProvider;
+    ADDRESSES_PROVIDER_ADDRESS = _addressesProviderAddress;
     SWAP_ROUTER = _swapRouter;
 }
 ```
 
 **Fixed deployment script:**
-```javascript
-// ✅ NETWORK-AWARE DEPLOYMENT
-const networkAddresses = {
-  "base": {
-    poolAddress: "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
-    addressesProvider: "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e",
-    swapRouter: "0x2626664c2603336E57B271c5C0b26F421741e481"
-  },
-  "base-sepolia": {
-    poolAddress: "0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b",
-    addressesProvider: "0x0D8176C0e8965F2730c4C1aA5aAE816fE4b7a802",
-    swapRouter: "0x8357227D4eDd91C4f85615C9cC5761899CD4B068"
-  }
-};
+```solidity
+// ✅ FOUNDRY DEPLOYMENT SCRIPT
+contract DeployAaveLiquidator is Script {
+    function run() external {
+        uint256 key = vm.envUint("PRIVATE_KEY");
+        vm.startBroadcast(key);
 
-const addresses = networkAddresses[network.name];
-const liquidator = await AaveLiquidator.deploy(
-  addresses.poolAddress,
-  addresses.addressesProvider,
-  addresses.swapRouter
-);
+        address pool = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+        address provider = 0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e;
+        address router = 0x2626664c2603336E57B271c5C0b26F421741e481;
+
+        new AaveLiquidator(pool, provider, router);
+
+        vm.stopBroadcast();
+    }
+}
 ```
 
 ### **Files Modified**
-- `contracts/AaveLiquidator.sol` - Made addresses configurable
-- `scripts/deploy.js` - Added network-specific address selection
-- Added network address documentation in contract comments
+- `contracts-foundry/AaveLiquidator.sol` - Made addresses configurable via constructor
+- `script/Deploy.s.sol` - Foundry deployment script with hardcoded Base mainnet addresses
 
 ### **Deployment Impact**
 ⚠️ **Contract redeployment required** - Constructor signature changed  
 ⚠️ **Old contract at `0x4818d1cb788C733Ae366D6d1D463EB48A0544528` is obsolete**  
 
 ### **Benefits**
-✅ **Network compatibility** - Same contract works on mainnet and testnet  
 ✅ **Address consistency** - Contract and bot use identical addresses  
-✅ **Future-proof** - Easy to deploy on new networks  
-✅ **Automated deployment** - Script selects correct addresses automatically  
+✅ **Configurable deployment** - Constructor accepts addresses as parameters  
+✅ **Simplified deployment** - Single Foundry script handles deployment  
+✅ **Base mainnet ready** - Hardcoded addresses for production deployment  
 
 ---
 
@@ -293,4 +287,4 @@ Polling mode activates automatically when:
 2. **Address mismatch resolved** through configurable contract deployment  
 3. **WebSocket fallback blindspot fixed** through getLogs-based polling
 
-The liquidation bot now maintains **100% uptime** for event discovery and is significantly more robust for production deployment on both Base mainnet and Base Sepolia testnet.
+The liquidation bot now maintains **100% uptime** for event discovery and is significantly more robust for production deployment on Base mainnet.

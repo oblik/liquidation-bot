@@ -1,74 +1,90 @@
-# Configuration Guide - WebSocket Event Monitoring
+# Configuration Reference
 
-This guide covers all configuration options for the Aave v3 Liquidation Bot with WebSocket-based event monitoring capabilities.
+Complete guide to configuring the Aave v3 Liquidation Bot environment variables, parameters, and settings for optimal performance.
 
-## Environment Variables
+## 🔧 Environment Variables
 
 ### Network Configuration
 
 ```bash
-# Base Sepolia Testnet RPC URL (HTTP)
-RPC_URL=https://sepolia.base.org
+# Base Mainnet (Production & Development)
+RPC_URL=https://mainnet.base.org
+WS_URL=wss://mainnet.base.org
 
-# WebSocket URL for real-time event monitoring (automatically derived if not set)
-WS_URL=wss://sepolia.base.org
-
-# Base Mainnet alternatives:
-# RPC_URL=https://mainnet.base.org
-# WS_URL=wss://mainnet.base.org
+# Dedicated Providers (Recommended for all environments)
+RPC_URL=https://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+WS_URL=wss://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
 ```
 
-**Note**: If `WS_URL` is not specified, the bot will automatically convert the HTTP URL to WebSocket by replacing `http://` with `ws://` and `https://` with `wss://`.
+**Configuration Notes:**
+- If `WS_URL` is not specified, the bot automatically converts `RPC_URL` by replacing `http://` with `ws://` and `https://` with `wss://`
+- WebSocket is required for real-time monitoring; HTTP polling is used as fallback
+- Dedicated providers (Alchemy, QuickNode) are recommended over public endpoints
 
 ### Security & Authentication
 
 ```bash
-# Private key for the bot wallet (KEEP SECURE!)
-PRIVATE_KEY=your_private_key_here
+# Private key for bot wallet (REQUIRED)
+PRIVATE_KEY=0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+
+# Optional: Target specific user for testing
+TARGET_USER=0x1234567890123456789012345678901234567890
 ```
 
-⚠️ **Security Warning**: Never commit your private key to version control. Keep it secure and consider using hardware wallets or key management services in production.
+⚠️ **Security Warning**: 
+- Never commit private keys to version control
+- Use separate keys for testing and production
+- Consider hardware wallets or key management services for production
+- Regularly rotate keys and withdraw accumulated profits
 
-### Contract Addresses
+### Contract Configuration
 
 ```bash
 # Your deployed AaveLiquidator contract address
-LIQUIDATOR_CONTRACT=0x4818d1cb788C733Ae366D6d1D463EB48A0544528
-
-# Target user address for focused monitoring (optional, for testing)
-TARGET_USER=0x1234567890123456789012345678901234567890
+LIQUIDATOR_CONTRACT=0x1234567890123456789012345678901234567890
 ```
+
+**Notes:**
+- Contract must be deployed before running liquidations
+- Use Foundry deployment: `forge script script/Deploy.s.sol --broadcast`
+- Single contract deployment on Base mainnet for all environments
 
 ### Database Configuration
 
 ```bash
-# SQLite database file (default for development)
+# SQLite (Development)
 DATABASE_URL=sqlite:liquidation_bot.db
 
-# PostgreSQL for production (recommended)
+# PostgreSQL (Production)
 DATABASE_URL=postgresql://username:password@localhost/liquidation_bot
 ```
 
-The bot automatically creates the following tables:
+**Database Tables Created:**
 - `user_positions` - Real-time user health factor tracking
 - `liquidation_events` - Historical liquidation records  
-- `monitoring_events` - Bot activity and status logs
+- `monitoring_events` - Bot activity and error logs
 
-### Bot Behavior Settings
+### Liquidation Behavior
 
 ```bash
 # Minimum profit threshold in wei (default: 0.01 ETH)
 MIN_PROFIT_THRESHOLD=10000000000000000
 
-# Gas price multiplier for competitive bidding (default: 2x)
+# Gas price multiplier for transaction priority (default: 2)
 GAS_PRICE_MULTIPLIER=2
 
-# Health factor threshold for "at risk" alerts (default: 1.1 = 110%)
+# Health factor threshold for "at risk" alerts (default: 1.1)
 HEALTH_FACTOR_THRESHOLD=1100000000000000000
 
-# Monitoring intervals in seconds (default: 5)
+# Monitoring interval in seconds (default: 5)
 MONITORING_INTERVAL_SECS=5
 ```
+
+**Parameter Explanations:**
+- `MIN_PROFIT_THRESHOLD`: Minimum expected profit before executing liquidation
+- `GAS_PRICE_MULTIPLIER`: Multiplier for competitive gas pricing (1 = market rate)
+- `HEALTH_FACTOR_THRESHOLD`: Health factor below which users are flagged as "at risk"
+- `MONITORING_INTERVAL_SECS`: How often to perform periodic health checks
 
 ### Logging Configuration
 
@@ -76,181 +92,254 @@ MONITORING_INTERVAL_SECS=5
 # Standard operation
 RUST_LOG=info
 
-# Debug WebSocket events and position updates
+# Debug mode (includes WebSocket events and position updates)
 RUST_LOG=debug
 
-# Maximum verbosity for development
+# Maximum verbosity (development only)
 RUST_LOG=trace
+
+# Selective logging
+RUST_LOG=liquidation_bot=debug,sqlx=warn
 ```
 
-## Configuration Examples
+## 📋 Configuration Examples
 
-### Development Setup (Base Sepolia)
+### Development Setup (Base Mainnet)
 
 ```bash
-RPC_URL=https://sepolia.base.org
-PRIVATE_KEY=your_test_private_key
-LIQUIDATOR_CONTRACT=0x4818d1cb788C733Ae366D6d1D463EB48A0544528
-TARGET_USER=0x1234567890123456789012345678901234567890
-DATABASE_URL=sqlite:liquidation_bot.db
-HEALTH_FACTOR_THRESHOLD=1200000000000000000
+# Network
+RPC_URL=https://mainnet.base.org
+WS_URL=wss://mainnet.base.org
+
+# Security
+PRIVATE_KEY=0x...your_development_private_key
+
+# Contract
+LIQUIDATOR_CONTRACT=0x...your_mainnet_contract
+
+# Behavior
+MIN_PROFIT_THRESHOLD=1000000000000000    # 0.001 ETH for development
+HEALTH_FACTOR_THRESHOLD=1200000000000000000  # 1.2 for safer development
+GAS_PRICE_MULTIPLIER=2
+MONITORING_INTERVAL_SECS=10
+
+# Database
+DATABASE_URL=sqlite:liquidation_bot_dev.db
+
+# Logging
 RUST_LOG=debug
 ```
 
 ### Production Setup (Base Mainnet)
 
 ```bash
-RPC_URL=https://mainnet.base.org
-WS_URL=wss://mainnet.base.org
-PRIVATE_KEY=your_production_private_key
-LIQUIDATOR_CONTRACT=your_mainnet_contract_address
-DATABASE_URL=postgresql://user:pass@localhost/liquidation_bot
-MIN_PROFIT_THRESHOLD=10000000000000000
-GAS_PRICE_MULTIPLIER=3
-HEALTH_FACTOR_THRESHOLD=1100000000000000000
-MONITORING_INTERVAL_SECS=3
+# Network (use dedicated provider)
+RPC_URL=https://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+WS_URL=wss://base-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+
+# Security
+PRIVATE_KEY=0x...your_production_private_key
+
+# Contract
+LIQUIDATOR_CONTRACT=0x...your_mainnet_contract
+
+# Behavior
+MIN_PROFIT_THRESHOLD=10000000000000000   # 0.01 ETH minimum
+HEALTH_FACTOR_THRESHOLD=1100000000000000000  # 1.1 for early detection
+GAS_PRICE_MULTIPLIER=3                   # Higher priority for mainnet
+MONITORING_INTERVAL_SECS=3               # Faster monitoring
+
+# Database
+DATABASE_URL=postgresql://liquidation_user:secure_password@localhost/liquidation_bot
+
+# Logging
 RUST_LOG=info
 ```
 
-## Network-Specific Information
+### High-Performance Setup
 
-### Base Sepolia Testnet
-- **Chain ID**: 84532
-- **Aave Pool**: `0xA37D7E3d3CaD89b44f9a08A96fE01a9F39Bd7794`
-- **Block Time**: ~2 seconds
-- **Test Liquidator**: `0x4818d1cb788C733Ae366D6d1D463EB48A0544528`
+```bash
+# Optimized for high-volume liquidations
+MIN_PROFIT_THRESHOLD=5000000000000000    # 0.005 ETH - lower threshold
+HEALTH_FACTOR_THRESHOLD=1050000000000000000  # 1.05 - more aggressive
+GAS_PRICE_MULTIPLIER=4                   # Highest priority
+MONITORING_INTERVAL_SECS=2               # Very fast monitoring
+RUST_LOG=warn                           # Minimal logging overhead
+```
 
-### Base Mainnet  
+## 🌐 Network Information
+
+### Base Mainnet
 - **Chain ID**: 8453
+- **RPC URL**: `https://mainnet.base.org`
+- **WebSocket**: `wss://mainnet.base.org`
 - **Aave Pool**: `0xA238Dd80C259a72e81d7e4664a9801593F98d1c5`
 - **Block Time**: ~2 seconds
+- **Currency**: ETH
 
-## WebSocket Event Monitoring Features
+**Note**: All development and testing is performed on Base mainnet. Use appropriate profit thresholds and monitoring intervals for your development environment.
 
-The bot now monitors the following Aave events in real-time:
+## 🎛️ Advanced Configuration
 
-### Core Events
-- **Borrow**: When users take new loans
-- **Repay**: When users repay debt
-- **Supply**: When users provide collateral
-- **Withdraw**: When users remove collateral
-- **LiquidationCall**: When liquidations occur
+### Performance Tuning
 
-- **Oracle Price Monitoring (Partial)**: Tracks Chainlink price feeds. Hooks for user reassessment on price changes are partially implemented.
+#### High-Volume Monitoring
+```bash
+MONITORING_INTERVAL_SECS=3
+HEALTH_FACTOR_THRESHOLD=1050000000000000000  # More aggressive
+GAS_PRICE_MULTIPLIER=3
+RUST_LOG=info  # Reduce logging overhead
+```
+
+#### Conservative Strategy
+```bash
+MONITORING_INTERVAL_SECS=10
+HEALTH_FACTOR_THRESHOLD=1200000000000000000  # Safer threshold  
+GAS_PRICE_MULTIPLIER=2
+MIN_PROFIT_THRESHOLD=50000000000000000  # Higher profit requirement
+```
+
+#### Debug/Development
+```bash
+MONITORING_INTERVAL_SECS=5
+HEALTH_FACTOR_THRESHOLD=1200000000000000000
+GAS_PRICE_MULTIPLIER=2
+RUST_LOG=debug
+TARGET_USER=0x...  # Focus on specific user
+```
+
+### Database Optimization
+
+#### SQLite Configuration
+```bash
+DATABASE_URL=sqlite:liquidation_bot.db?cache=shared&mode=rwc
+```
+
+#### PostgreSQL Configuration
+```bash
+# With connection pooling
+DATABASE_URL=postgresql://user:pass@localhost/liquidation_bot?pool_max_conns=10&pool_min_conns=2
+```
+
+### WebSocket Configuration
+
+The bot automatically handles WebSocket connectivity:
+
+- **Real-time Mode**: When `WS_URL` uses `wss://` protocol
+- **Polling Mode**: Fallback when WebSocket unavailable
+- **Auto-retry**: Automatic reconnection on connection loss
+
+## 🔍 Monitoring & Alerts
 
 ### Event Processing Pipeline
+
 1. **WebSocket Subscription** → Real-time event detection
-2. **Event Parser** → Extract affected user addresses
+2. **Event Parser** → Extract affected user addresses  
 3. **Position Update** → Refresh user health factors
 4. **Database Storage** → Persist position data
 5. **Opportunity Detection** → Identify liquidatable positions
-6. **Alert System (Planned)** → Currently logs opportunities internally. External alerts not yet implemented.
+6. **Profit Calculation** → Validate economic viability
+7. **Execution** → Submit liquidation transaction
 
-## Performance Tuning
+### Monitored Events
 
-### For High-Volume Monitoring
+- **Borrow** - New loans trigger user monitoring
+- **Supply** - Collateral deposits affect health factors
+- **Repay** - Debt repayments improve user health
+- **Withdraw** - Collateral removals create liquidation opportunities
+- **LiquidationCall** - Track competitive liquidations
+- **Oracle Price Updates** - Market volatility triggers reassessment
+
+## 🛠️ Troubleshooting
+
+### WebSocket Issues
 ```bash
-MONITORING_INTERVAL_SECS=3
-HEALTH_FACTOR_THRESHOLD=1050000000000000000  # 1.05 = 105%
-GAS_PRICE_MULTIPLIER=3
-RUST_LOG=info
+# Test WebSocket connectivity
+wscat -c $WS_URL
+
+# Check bot logs for connection status
+grep "WebSocket" bot.log
+
+# Verify fallback to polling
+grep "polling" bot.log
 ```
 
-### For Development/Testing
+### Database Issues
 ```bash
-MONITORING_INTERVAL_SECS=10
-HEALTH_FACTOR_THRESHOLD=1200000000000000000  # 1.2 = 120%
-GAS_PRICE_MULTIPLIER=2
-RUST_LOG=debug
+# Test SQLite connectivity
+sqlite3 $DATABASE_URL ".tables"
+
+# Test PostgreSQL connectivity  
+psql $DATABASE_URL -c "SELECT version();"
+
+# Check table creation
+sqlite3 $DATABASE_URL "SELECT name FROM sqlite_master WHERE type='table';"
 ```
 
-## Database Schema
+### Performance Issues
+```bash
+# Monitor memory usage
+ps aux | grep liquidation-bot
 
-### user_positions
-```sql
-CREATE TABLE user_positions (
-    address TEXT PRIMARY KEY,
-    total_collateral_base TEXT NOT NULL,
-    total_debt_base TEXT NOT NULL,
-    available_borrows_base TEXT NOT NULL,
-    current_liquidation_threshold TEXT NOT NULL,
-    ltv TEXT NOT NULL,
-    health_factor TEXT NOT NULL,
-    last_updated DATETIME NOT NULL,
-    is_at_risk BOOLEAN NOT NULL DEFAULT FALSE
-);
-```
--- Note: Entries for users with zero debt are retained indefinitely. Future updates may add automatic pruning.
+# Monitor database size
+du -h liquidation_bot.db
 
-### liquidation_events  
-```sql
-CREATE TABLE liquidation_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_address TEXT NOT NULL,
-    collateral_asset TEXT NOT NULL,
-    debt_asset TEXT NOT NULL,
-    debt_covered TEXT NOT NULL,
-    collateral_received TEXT NOT NULL,
-    profit TEXT NOT NULL,
-    tx_hash TEXT,
-    block_number INTEGER,
-    timestamp DATETIME NOT NULL
-);
+# Check event processing rate
+grep "Status Report" bot.log | tail -5
 ```
 
-### monitoring_events
-```sql
-CREATE TABLE monitoring_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_type TEXT NOT NULL,
-    user_address TEXT,
-    asset_address TEXT,
-    health_factor TEXT,
-    timestamp DATETIME NOT NULL,
-    details TEXT
-);
+### Configuration Validation
+
+The bot validates configuration on startup:
+
+```
+INFO liquidation_bot: Configuration loaded
+INFO liquidation_bot: ✅ Signer ready for transaction signing
+INFO liquidation_bot: HTTP Provider connected to: https://mainnet.base.org
+INFO liquidation_bot: WebSocket will connect to: wss://mainnet.base.org
 ```
 
-## Troubleshooting
+Common validation errors:
+- Invalid private key format
+- Unreachable RPC endpoints
+- Database connection failures
+- Missing required environment variables
 
-### WebSocket Connection Issues
-- Verify `WS_URL` is accessible
-- Check firewall/proxy settings
-- Try alternative WebSocket endpoints
+## 📊 Configuration Impact
 
-### Database Connection Problems
-- Ensure SQLite file has write permissions
-- For PostgreSQL, verify connection string
-- Check database server status
+| Setting | Low Value | High Value | Impact |
+|---------|-----------|------------|---------|
+| `MIN_PROFIT_THRESHOLD` | More liquidations | Fewer, more profitable | Risk vs Reward |
+| `HEALTH_FACTOR_THRESHOLD` | Later detection | Earlier warning | Timing vs Noise |
+| `GAS_PRICE_MULTIPLIER` | Lower costs | Faster execution | Cost vs Speed |
+| `MONITORING_INTERVAL_SECS` | Real-time | Battery saving | Responsiveness vs Resources |
 
-### High Memory Usage
-- Reduce `MONITORING_INTERVAL_SECS` 
-- Implement periodic database cleanup
-- Monitor the `user_positions` cache size
+## 🔒 Security Considerations
 
-### Missing Events
-- Check WebSocket connection stability
-- Verify RPC endpoint reliability
-- Enable debug logging to trace events
+### Private Key Security
+- Use dedicated wallet for bot operations
+- Minimum balance required for gas fees
+- Regular withdrawal of accumulated profits
+- Monitor for unusual transaction patterns
 
-## Security Considerations
+### Network Security  
+- Use HTTPS/WSS endpoints only
+- Consider VPN for additional privacy
+- Monitor for RPC rate limiting
+- Have backup RPC providers configured
 
-1. **Private Key Management**
-   - Use environment variables, never hardcode
-   - Consider hardware wallets for production
-   - Regularly rotate keys and withdraw profits
+### Operational Security
+- Monitor bot health continuously
+- Set up alerting for failures
+- Regular backups of database
+- Keep software updated
 
-2. **Database Security**
-   - Use strong PostgreSQL credentials
-   - Restrict database access by IP
-   - Regular backups of position data
+## 📈 Optimization Guidelines
 
-3. **Network Security**
-   - Use HTTPS/WSS endpoints only
-   - Monitor for unusual transaction patterns
-   - Set up alerts for failed transactions
+1. **Start Conservative**: Use higher thresholds initially
+2. **Monitor Performance**: Track success/failure rates
+3. **Adjust Gradually**: Tune parameters based on market conditions
+4. **Benchmark**: Compare against manual calculations
+5. **Document Changes**: Keep configuration change log
 
-4. **Operational Security**
-   - Monitor bot health continuously
-   - Set up alerting for bot downtime
-   - Keep the bot software updated 
+For additional details, see the [Setup Guide](SETUP.md) and [Architecture Overview](ARCHITECTURE.md). 

@@ -54,13 +54,13 @@ impl BotConfig {
                 Ok(threshold) => threshold,
                 Err(e) => {
                     warn!(
-                        "Invalid MIN_PROFIT_THRESHOLD '{}': {}. Using default 5 ETH.",
+                        "Invalid MIN_PROFIT_THRESHOLD '{}': {}. Using default 0.01 ETH.",
                         threshold_str, e
                     );
-                    U256::from(5000000000000000000u64) // 5 ETH wei default
+                    U256::from(10000000000000000u64) // 0.01 ETH wei default
                 }
             },
-            Err(_) => U256::from(5000000000000000000u64), // 5 ETH wei default
+            Err(_) => U256::from(10000000000000000u64), // 0.01 ETH wei default
         };
 
         let gas_price_multiplier = match std::env::var("GAS_PRICE_MULTIPLIER") {
