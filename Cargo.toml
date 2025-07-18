@@ -3,6 +3,10 @@ name = "liquidation-bot"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "migrate_to_postgres"
+path = "scripts/migrate_to_postgres.rs"
+
 [dependencies]
 # Core async runtime
 tokio = { version = "1.0", features = ["full"] }
@@ -34,6 +38,7 @@ sqlx = { version = "0.7", features = [
   "sqlite",
   "chrono",
   "uuid",
+  "any",
 ] }
 
 # HTTP client
@@ -41,7 +46,7 @@ reqwest = { version = "0.11", features = ["json"] }
 
 # Logging and tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Time handling
 chrono = { version = "0.4", features = ["serde"] }

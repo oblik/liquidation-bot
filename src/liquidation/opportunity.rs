@@ -2,7 +2,7 @@ use alloy_contract::ContractInstance;
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use eyre::Result;
-use sqlx::{Pool, Sqlite};
+use crate::database::DatabasePool;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
@@ -107,7 +107,7 @@ where
 /// Handle a detected liquidation opportunity with real profitability calculation and execution
 pub async fn handle_liquidation_opportunity<P>(
     provider: Arc<P>,
-    db_pool: &Pool<Sqlite>,
+    db_pool: &DatabasePool,
     user: Address,
     min_profit_threshold: U256,
     liquidator_contract_address: Option<Address>,
@@ -138,12 +138,9 @@ where
             warn!("User position not found in database: {:?}", user);
             
             // Debug: Check how many total users are in the database
-            match sqlx::query!("SELECT COUNT(*) as count FROM user_positions")
-                .fetch_one(db_pool)
-                .await 
-            {
-                Ok(row) => {
-                    warn!("📊 Total users in database: {}", row.count);
+            match crate::database::get_user_position_count(db_pool).await {
+                Ok(count) => {
+                    warn!("📊 Total users in database: {}", count);
                 }
                 Err(e) => {
                     error!("Failed to count database users: {}", e);
@@ -311,7 +308,7 @@ where
 
 /// Get user position from database
 async fn get_user_position_from_db(
-    db_pool: &Pool<Sqlite>,
+    db_pool: &DatabasePool,
     user: Address,
 ) -> Result<Option<UserPosition>> {
     let user_str = user.to_string();
@@ -319,33 +316,21 @@ async fn get_user_position_from_db(
     debug!("🔍 Looking up user in database: {} (formatted as: {})", user, user_str);
 
     // Try case-insensitive lookup to handle any format mismatches
-    let row = sqlx::query!("SELECT * FROM user_positions WHERE LOWER(address) = LOWER(?)", user_str)
-        .fetch_optional(db_pool)
-        .await?;
-
-    if let Some(row) = row {
-        debug!("✅ Found user position in database: {}", user_str);
-        let position = UserPosition {
-            address: user,
-            total_collateral_base: row.total_collateral_base.parse()?,
-            total_debt_base: row.total_debt_base.parse()?,
-            available_borrows_base: row.available_borrows_base.parse()?,
-            current_liquidation_threshold: row.current_liquidation_threshold.parse()?,
-            ltv: row.ltv.parse()?,
-            health_factor: row.health_factor.parse()?,
-            last_updated: row.last_updated.and_utc(),
-            is_at_risk: row.is_at_risk,
-        };
-        Ok(Some(position))
-    } else {
-        debug!("❌ User position not found in database: {}", user_str);
-        Ok(None)
+    match crate::database::get_user_position_by_address(db_pool, &user).await? {
+        Some(position) => {
+            debug!("✅ Found user position in database: {}", user_str);
+            Ok(Some(position))
+        }
+        None => {
+            debug!("❌ User position not found in database: {}", user_str);
+            Ok(None)
+        }
     }
 }
 
 /// Save liquidation record to database
 async fn save_liquidation_record(
-    db_pool: &Pool<Sqlite>,
+    db_pool: &DatabasePool,
     opportunity: &crate::models::LiquidationOpportunity,
     tx_hash: &str,
 ) -> Result<()> {
@@ -357,43 +342,31 @@ async fn save_liquidation_record(
     let collateral_received_str = opportunity.expected_collateral_received.to_string();
     let profit_str = opportunity.estimated_profit.to_string();
 
-    sqlx::query!(
-        r#"
-        INSERT INTO liquidation_events (
-            user_address, collateral_asset, debt_asset, debt_covered,
-            collateral_received, profit, tx_hash, timestamp
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-        "#,
-        user_str,
-        collateral_str,
-        debt_str,
-        debt_covered_str,
-        collateral_received_str,
-        profit_str,
-        tx_hash
-    )
-    .execute(db_pool)
-    .await?;
+    crate::database::record_liquidation_event(
+        db_pool,
+        &opportunity.user,
+        &collateral_str,
+        &debt_str,
+        &debt_covered_str,
+        &collateral_received_str,
+        &profit_str,
+        Some(tx_hash),
+        None,
+    ).await?;
 
     Ok(())
 }
 
 /// Legacy function for backward compatibility - now with enhanced functionality
 pub async fn handle_liquidation_opportunity_legacy(
-    db_pool: &Pool<Sqlite>,
+    db_pool: &DatabasePool,
     user: Address,
     min_profit_threshold: U256,
 ) -> Result<()> {
     warn!("Using legacy liquidation handler - functionality limited");
 
-    // Log the opportunity
-    database::log_monitoring_event(
-        db_pool,
-        "liquidation_opportunity_legacy",
-        Some(user),
-        Some("Legacy liquidation opportunity handler called"),
-    )
-    .await?;
+    // Log the opportunity (using info! macro instead of database logging)
+    info!("🎯 Legacy liquidation opportunity detected for user: {:?}", user);
 
     info!("🎯 LIQUIDATION OPPORTUNITY DETECTED for user: {:?}", user);
     info!("⚠️  Enhanced liquidation execution requires provider and signer");
