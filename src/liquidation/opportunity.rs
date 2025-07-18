@@ -316,7 +316,7 @@ async fn get_user_position_from_db(
     debug!("🔍 Looking up user in database: {} (formatted as: {})", user, user_str);
 
     // Try case-insensitive lookup to handle any format mismatches
-    match crate::database::get_user_position_by_address(db_pool, &user).await? {
+    match crate::database::get_user_position(db_pool, user).await? {
         Some(position) => {
             debug!("✅ Found user position in database: {}", user_str);
             Ok(Some(position))
@@ -335,7 +335,7 @@ async fn save_liquidation_record(
     tx_hash: &str,
 ) -> Result<()> {
     // Use checksummed hex representation for consistent address storage (matches database storage format)
-    let user_str = opportunity.user.to_string();
+    let _user_str = opportunity.user.to_string();
     let collateral_str = opportunity.collateral_asset.to_string();
     let debt_str = opportunity.debt_asset.to_string();
     let debt_covered_str = opportunity.debt_to_cover.to_string();
@@ -359,7 +359,7 @@ async fn save_liquidation_record(
 
 /// Legacy function for backward compatibility - now with enhanced functionality
 pub async fn handle_liquidation_opportunity_legacy(
-    db_pool: &DatabasePool,
+    _db_pool: &DatabasePool,
     user: Address,
     min_profit_threshold: U256,
 ) -> Result<()> {
