@@ -3,10 +3,6 @@ name = "liquidation-bot"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "migrate_to_postgres"
-path = "scripts/migrate_to_postgres.rs"
-
 [dependencies]
 # Core async runtime
 tokio = { version = "1.0", features = ["full"] }

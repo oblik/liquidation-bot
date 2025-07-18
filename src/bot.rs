@@ -293,7 +293,7 @@ where
                                 "🔍 Triggering health check for at-risk user from DB: {:?}",
                                 user
                             );
-                            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user));
+                            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user.address));
                         }
                     }
                     Err(e) => {
@@ -392,7 +392,7 @@ where
 
         for user in all_users {
             // Trigger a user position update to populate collateral mapping
-            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user));
+            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user.address));
             processed_count += 1;
 
             // Add small delay to avoid overwhelming the system

@@ -7,7 +7,7 @@ A production-ready Aave v3 liquidation bot for Base network, built with Rust and
 - **🔴 Real-Time Monitoring**: WebSocket-based event listening with HTTP polling fallback
 - **💰 Profitability Engine**: Advanced profit calculations including gas, fees, and slippage
 - **⚡ Flash Loan Liquidations**: Atomic liquidations via deployed smart contract
-- **📊 Database Persistence**: SQLite/PostgreSQL support for position tracking with automatic migration
+- **📊 Database Persistence**: SQLite/PostgreSQL support for position tracking
 - **🔧 Base Mainnet Optimized**: Fully optimized for Base network with L2Pool integration
 - **🛡️ Production Hardened**: Comprehensive error handling and recovery mechanisms
 - **🚀 PostgreSQL Migration**: Built-in migration tool for upgrading from SQLite to PostgreSQL
@@ -19,7 +19,7 @@ A production-ready Aave v3 liquidation bot for Base network, built with Rust and
 - Foundry (for smart contract development)
 - Base mainnet RPC access (HTTP + WebSocket)
 - Private key with sufficient ETH for gas fees
-- PostgreSQL (optional, for production use)
+- PostgreSQL
 
 ⚠️ **Important**: This bot operates exclusively on Base mainnet for all environments including development and testing.
 
@@ -48,9 +48,8 @@ PRIVATE_KEY=your_private_key_here
 LIQUIDATOR_CONTRACT=0xYourDeployedContractAddress
 MIN_PROFIT_THRESHOLD=10000000000000000  # 0.01 ETH in wei
 
-# Database (SQLite by default, PostgreSQL for production)
-DATABASE_URL=sqlite:liquidation_bot.db
-# DATABASE_URL=postgresql://username:password@localhost/liquidation_bot
+# Database
+DATABASE_URL=postgresql://username:password@localhost/liquidation_bot
 
 RUST_LOG=info
 ```
@@ -72,36 +71,6 @@ cargo run --release
 # Debug mode
 RUST_LOG=debug cargo run
 ```
-
-## 🗄️ Database Migration
-
-### SQLite to PostgreSQL Migration
-
-For production deployments, migrate from SQLite to PostgreSQL for better performance and scalability:
-
-```bash
-# 1. Set up PostgreSQL database
-sudo -u postgres createdb liquidation_bot
-sudo -u postgres createuser liquidation_user
-
-# 2. Set environment variables
-export SQLITE_DATABASE_URL="sqlite:liquidation_bot.db"
-export POSTGRES_DATABASE_URL="postgresql://liquidation_user:password@localhost/liquidation_bot"
-
-# 3. Run migration
-cargo run --bin migrate_to_postgres
-
-# 4. Update your .env file
-DATABASE_URL=postgresql://liquidation_user:password@localhost/liquidation_bot
-```
-
-The migration is:
-- ✅ **Non-destructive** - Original SQLite database remains unchanged
-- ✅ **Resumable** - Can be run multiple times safely
-- ✅ **Comprehensive** - Migrates all tables and data
-- ✅ **Validated** - Tests connections and verifies data integrity
-
-See [POSTGRES_MIGRATION.md](docs/POSTGRES_MIGRATION.md) for detailed migration instructions.
 
 ## 🏗️ Architecture
 
