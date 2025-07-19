@@ -65,7 +65,7 @@ async fn init_postgres_schema(postgres_pool: &Pool<Postgres>) -> Result<()> {
             current_liquidation_threshold TEXT NOT NULL,
             ltv TEXT NOT NULL,
             health_factor TEXT NOT NULL,
-            last_updated TIMESTAMP NOT NULL,
+            last_updated TIMESTAMPTZ NOT NULL,
             is_at_risk BOOLEAN NOT NULL DEFAULT FALSE
         )
         "#,
@@ -86,7 +86,7 @@ async fn init_postgres_schema(postgres_pool: &Pool<Postgres>) -> Result<()> {
             profit TEXT NOT NULL,
             tx_hash TEXT,
             block_number INTEGER,
-            timestamp TIMESTAMP NOT NULL
+            timestamp TIMESTAMPTZ NOT NULL
         )
         "#,
     )
@@ -102,7 +102,7 @@ async fn init_postgres_schema(postgres_pool: &Pool<Postgres>) -> Result<()> {
             user_address TEXT,
             asset_address TEXT,
             health_factor TEXT,
-            timestamp TIMESTAMP NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL,
             details TEXT
         )
         "#,
@@ -118,7 +118,7 @@ async fn init_postgres_schema(postgres_pool: &Pool<Postgres>) -> Result<()> {
             asset_address TEXT NOT NULL,
             asset_symbol TEXT NOT NULL,
             price TEXT NOT NULL,
-            timestamp TIMESTAMP NOT NULL
+            timestamp TIMESTAMPTZ NOT NULL
         )
         "#,
     )
