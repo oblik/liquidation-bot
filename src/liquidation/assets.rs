@@ -1,7 +1,6 @@
 use crate::models::LiquidationAssetConfig;
 use alloy_primitives::Address;
 use alloy_sol_types::{sol, SolCall};
-use alloy_provider::Provider;
 use alloy_rpc_types::TransactionRequest;
 use eyre::Result;
 use std::collections::HashMap;
@@ -143,8 +142,10 @@ pub async fn fetch_asset_config_data(
     let config_data = IAaveProtocolDataProvider::getReserveConfigurationDataCall::abi_decode_returns(&result, true)
         .map_err(|e| eyre::eyre!("Failed to decode reserve config data: {}", e))?;
     
-    let decimals = config_data.decimals as u8;
-    let liquidation_bonus = config_data.liquidationBonus as u16;
+    let decimals = config_data.decimals.try_into()
+        .map_err(|_| eyre::eyre!("Invalid decimals value: {}", config_data.decimals))?;
+    let liquidation_bonus = config_data.liquidationBonus.try_into()
+        .map_err(|_| eyre::eyre!("Invalid liquidation bonus value: {}", config_data.liquidationBonus))?;
     
     Ok((decimals, liquidation_bonus))
 }
