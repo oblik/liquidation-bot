@@ -91,7 +91,17 @@ where
         let asset_configs = oracle::init_asset_configs();
 
         // Initialize liquidation asset configurations
-        let liquidation_assets = liquidation::init_base_mainnet_assets();
+        // Initialize liquidation asset configurations with dynamic reserve indices
+        let liquidation_assets = match liquidation::assets::init_base_mainnet_assets_async(&*provider).await {
+            Ok(assets) => {
+                info!("✅ Successfully loaded asset configurations with dynamic reserve indices");
+                assets
+            }
+            Err(e) => {
+                warn!("⚠️ Failed to fetch dynamic reserve indices, falling back to hardcoded values: {}", e);
+                liquidation::assets::init_base_mainnet_assets()
+            }
+        };
 
         // Get liquidator contract address from config
         let liquidator_contract_address = config.liquidator_contract;
@@ -167,6 +177,7 @@ where
                         self.liquidator_contract_address,
                         Some(self.signer.clone()),
                         &self.pool_contract,
+                        &self.liquidation_assets,
                     )
                     .await
                     {
