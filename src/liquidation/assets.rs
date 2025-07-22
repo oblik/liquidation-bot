@@ -1,11 +1,11 @@
 use crate::models::LiquidationAssetConfig;
-use alloy_primitives::{Address, U256};
+use alloy_primitives::Address;
 use alloy_sol_types::{sol, SolCall};
 use alloy_provider::Provider;
 use alloy_rpc_types::TransactionRequest;
 use eyre::Result;
 use std::collections::HashMap;
-use tracing::{info, warn, error};
+use tracing::{info, warn};
 
 // Aave UiPoolDataProvider interface for fetching reserve list
 sol! {
@@ -15,9 +15,23 @@ sol! {
     }
 }
 
+// Aave ProtocolDataProvider interface for token symbols
+sol! {
+    #[allow(missing_docs)]
+    interface IAaveProtocolDataProvider {
+        function getAllReservesTokens() external view returns (TokenData[] memory);
+    }
+    struct TokenData {
+        string symbol;
+        address tokenAddress;
+    }
+}
+
 // Base mainnet Aave contract addresses
-pub const BASE_POOL_ADDRESSES_PROVIDER: &str = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5";
-pub const BASE_UI_POOL_DATA_PROVIDER: &str = "0x2d8A3C5677189723C4cB8873CfC9C8976FDF38Ac";
+pub const BASE_POOL_ADDRESSES_PROVIDER: &str = "0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D";
+pub const BASE_UI_POOL_DATA_PROVIDER: &str = "0x68100bD5345eA474D93577127C11F39FF8463e93";
+// Legacy, only used for fetching token symbols
+pub const BASE_AAVE_PROTOCOL_DATA_PROVIDER: &str = "0xC4Fcf9893072d61Cc2899C0054877Cb752587981";
 
 /// Dynamically fetch reserve indices from Aave protocol
 pub async fn fetch_reserve_indices(
@@ -38,13 +52,29 @@ pub async fn fetch_reserve_indices(
         .to(ui_pool_data_provider)
         .input(call_data.into());
     
-    let result = provider.call(&call_request, None).await
+    let result = provider.call(&call_request).await
         .map_err(|e| eyre::eyre!("Failed to fetch reserves list: {}", e))?;
     
     // Decode the response
     let reserves_list = IUiPoolDataProvider::getReservesListCall::abi_decode_returns(&result, true)
         .map_err(|e| eyre::eyre!("Failed to decode reserves list: {}", e))?;
-    
+
+    // Fetch token symbols via AaveProtocolDataProvider
+    let protocol_data_provider: Address = BASE_AAVE_PROTOCOL_DATA_PROVIDER.parse()?;
+    let symbol_call = IAaveProtocolDataProvider::getAllReservesTokensCall {};
+    let symbol_data = provider.call(
+        &TransactionRequest::default()
+            .to(protocol_data_provider)
+            .input(symbol_call.abi_encode().into())
+    ).await
+        .map_err(|e| eyre::eyre!("Failed to fetch token symbols: {}", e))?;
+    let token_data = IAaveProtocolDataProvider::getAllReservesTokensCall::abi_decode_returns(&symbol_data, true)?
+        ._0;
+    let mut symbol_map: HashMap<Address, String> = HashMap::new();
+    for td in token_data {
+        symbol_map.insert(td.tokenAddress, td.symbol);
+    }
+
     // Create mapping from address to index
     let mut reserve_indices = HashMap::new();
     for (index, &address) in reserves_list._0.iter().enumerate() {
@@ -53,20 +83,20 @@ pub async fn fetch_reserve_indices(
             continue;
         }
         reserve_indices.insert(address, index as u16);
-        info!("📍 Reserve {}: {} -> index {}", index, address, index);
+        let symbol = symbol_map.get(&address).map(|s| s.as_str()).unwrap_or("UNKNOWN");
+        info!("📍 Reserve {}: {} (symbol: {}) -> index {}", index, address, symbol, index);
     }
     
     info!("✅ Successfully fetched {} reserve indices", reserve_indices.len());
     Ok(reserve_indices)
 }
 
+
 /// Initialize asset configurations for Base mainnet with dynamic reserve indices
 pub async fn init_base_mainnet_assets_async(
     provider: &impl alloy_provider::Provider,
 ) -> Result<HashMap<Address, LiquidationAssetConfig>> {
-    // First fetch the dynamic reserve indices
     let reserve_indices = fetch_reserve_indices(provider).await?;
-    
     let mut assets = HashMap::new();
 
     // WETH (Wrapped Ether) - Base mainnet

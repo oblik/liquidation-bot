@@ -1,3 +1,4 @@
+use crate::database::DatabasePool;
 use alloy_contract::{ContractInstance, Interface};
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
@@ -5,7 +6,6 @@ use alloy_signer_local::PrivateKeySigner;
 use dashmap::DashMap;
 use eyre::Result;
 use parking_lot::RwLock as SyncRwLock;
-use crate::database::DatabasePool;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -92,13 +92,25 @@ where
 
         // Initialize liquidation asset configurations
         // Initialize liquidation asset configurations with dynamic reserve indices
-        let liquidation_assets = match liquidation::assets::init_base_mainnet_assets_async(&*provider).await {
+        let liquidation_assets = match liquidation::assets::init_base_mainnet_assets_async(
+            &*provider,
+        )
+        .await
+        {
             Ok(assets) => {
-                info!("✅ Successfully loaded asset configurations with dynamic reserve indices");
+                info!("✅ Successfully loaded asset configurations with dynamic reserve indices from Aave protocol");
                 assets
             }
             Err(e) => {
-                warn!("⚠️ Failed to fetch dynamic reserve indices, falling back to hardcoded values: {}", e);
+                error!("❌ Failed to fetch dynamic reserve indices from Aave protocol");
+                error!("📋 Error details: {}", e);
+                warn!("🔄 Falling back to hardcoded asset configurations");
+                warn!("⚠️  IMPORTANT: This fallback uses hardcoded asset IDs which may become incorrect");
+                warn!("⚠️  if Aave's reserve list ordering changes over time!");
+                warn!("🔍 To fix this issue:");
+                warn!("   1. Verify the correct Aave V3 contract addresses for Base mainnet");
+                warn!("   2. Update BASE_POOL_ADDRESSES_PROVIDER and BASE_UI_POOL_DATA_PROVIDER");
+                warn!("   3. Check if Aave V3 is actually deployed on Base network");
                 liquidation::assets::init_base_mainnet_assets()
             }
         };
@@ -304,7 +316,9 @@ where
                                 "🔍 Triggering health check for at-risk user from DB: {:?}",
                                 user
                             );
-                            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user.address));
+                            let _ = self
+                                .event_tx
+                                .send(BotEvent::UserPositionChanged(user.address));
                         }
                     }
                     Err(e) => {
@@ -403,7 +417,9 @@ where
 
         for user in all_users {
             // Trigger a user position update to populate collateral mapping
-            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user.address));
+            let _ = self
+                .event_tx
+                .send(BotEvent::UserPositionChanged(user.address));
             processed_count += 1;
 
             // Add small delay to avoid overwhelming the system
