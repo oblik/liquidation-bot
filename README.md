@@ -48,6 +48,9 @@ PRIVATE_KEY=your_private_key_here
 LIQUIDATOR_CONTRACT=0xYourDeployedContractAddress
 MIN_PROFIT_THRESHOLD=10000000000000000  # 0.01 ETH in wei
 
+# Asset Loading Configuration
+ASSET_LOADING_METHOD=dynamic_with_fallback  # Options: dynamic_with_fallback, fully_dynamic, hardcoded, file:assets.json
+
 # Database
 DATABASE_URL=postgresql://username:password@localhost/liquidation_bot
 
@@ -136,6 +139,60 @@ Example test output shows real profitability logic considering liquidation bonus
 - **[Architecture Overview](docs/ARCHITECTURE.md)** - Technical implementation details
 - **[Testing Guide](docs/TESTING.md)** - Testing and simulation documentation
 - **[Roadmap](docs/ROADMAP.md)** - Development phases and future features
+
+## 🎯 Asset Configuration
+
+The bot supports multiple asset loading strategies to handle new Aave reserves without redeployment:
+
+### Loading Methods
+
+Configure via `ASSET_LOADING_METHOD` environment variable:
+
+#### `dynamic_with_fallback` (Default)
+- Fetches asset IDs, decimals, and liquidation bonuses from Aave protocol
+- Falls back to hardcoded values if protocol calls fail
+- Best balance of reliability and adaptability
+
+#### `fully_dynamic`
+- Loads ALL assets dynamically from Aave protocol
+- Automatically supports new reserves without code changes
+- Requires stable RPC connection
+
+#### `file:assets.json`
+- Loads asset configurations from external JSON file
+- Allows customization of liquidation bonuses and other parameters
+- Useful for testing or custom asset configurations
+
+#### `hardcoded`
+- Uses only hardcoded asset configurations
+- Most reliable but requires redeployment for new assets
+
+### Sample Asset Configuration File
+
+Create `assets.json` for file-based loading:
+
+```json
+{
+  "assets": [
+    {
+      "address": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "liquidation_bonus": 500,
+      "is_collateral": true,
+      "is_borrowable": true
+    },
+    {
+      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "liquidation_bonus": 450,
+      "is_collateral": true,
+      "is_borrowable": true
+    }
+  ]
+}
+```
 
 ## 🔧 Key Configuration
 

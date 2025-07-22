@@ -2,6 +2,19 @@ use alloy_primitives::{Address, U256};
 use eyre::Result;
 use tracing::warn;
 
+// Asset loading method configuration
+#[derive(Debug, Clone)]
+pub enum AssetLoadingMethod {
+    /// Load from Aave protocol with fallback to hardcoded values
+    DynamicWithFallback,
+    /// Load all assets dynamically from Aave protocol
+    FullyDynamic,
+    /// Load from external config file
+    FromFile(String),
+    /// Use hardcoded asset configurations only
+    Hardcoded,
+}
+
 // Configuration struct
 #[derive(Debug, Clone)]
 pub struct BotConfig {
@@ -16,6 +29,7 @@ pub struct BotConfig {
     pub health_factor_threshold: U256, // Alert/at-risk threshold (e.g., 1.1)
                                         // Should be > 1.0 (liquidation threshold) for early warning
     pub monitoring_interval_secs: u64,
+    pub asset_loading_method: AssetLoadingMethod,
 }
 
 impl BotConfig {
@@ -129,6 +143,22 @@ impl BotConfig {
             Err(_) => 5,
         };
 
+        let asset_loading_method = match std::env::var("ASSET_LOADING_METHOD") {
+            Ok(method_str) => match method_str.to_lowercase().as_str() {
+                "dynamic" | "dynamic_with_fallback" => AssetLoadingMethod::DynamicWithFallback,
+                "fully_dynamic" | "full_dynamic" => AssetLoadingMethod::FullyDynamic,
+                "hardcoded" => AssetLoadingMethod::Hardcoded,
+                path if path.starts_with("file:") => {
+                    AssetLoadingMethod::FromFile(path.strip_prefix("file:").unwrap().to_string())
+                }
+                _ => {
+                    warn!("Unknown ASSET_LOADING_METHOD '{}'. Using default 'dynamic_with_fallback'.", method_str);
+                    AssetLoadingMethod::DynamicWithFallback
+                }
+            },
+            Err(_) => AssetLoadingMethod::DynamicWithFallback,
+        };
+
         Ok(Self {
             rpc_url,
             ws_url,
@@ -140,6 +170,7 @@ impl BotConfig {
             database_url,
             health_factor_threshold,
             monitoring_interval_secs,
+            asset_loading_method,
         })
     }
 }

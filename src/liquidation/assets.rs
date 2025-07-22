@@ -5,7 +5,9 @@ use alloy_provider::Provider;
 use alloy_rpc_types::TransactionRequest;
 use eyre::Result;
 use std::collections::HashMap;
-use tracing::{info, warn};
+use std::path::Path;
+use serde::{Deserialize, Serialize};
+use tracing::{info, warn, error};
 
 // Aave UiPoolDataProvider interface for fetching reserve list
 sol! {
@@ -15,16 +17,44 @@ sol! {
     }
 }
 
-// Aave ProtocolDataProvider interface for token symbols
+// Aave ProtocolDataProvider interface for token symbols and configuration data
 sol! {
     #[allow(missing_docs)]
     interface IAaveProtocolDataProvider {
         function getAllReservesTokens() external view returns (TokenData[] memory);
+        function getReserveConfigurationData(address asset) external view returns (
+            uint256 decimals,
+            uint256 ltv,
+            uint256 liquidationThreshold,
+            uint256 liquidationBonus,
+            uint256 reserveFactor,
+            bool usageAsCollateralEnabled,
+            bool borrowingEnabled,
+            bool stableBorrowRateEnabled,
+            bool isActive,
+            bool isFrozen
+        );
     }
     struct TokenData {
         string symbol;
         address tokenAddress;
     }
+}
+
+// External asset configuration for loading from files
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalAssetConfig {
+    pub address: String,
+    pub symbol: String,
+    pub decimals: u8,
+    pub liquidation_bonus: u16, // In basis points (e.g., 500 = 5%)
+    pub is_collateral: bool,
+    pub is_borrowable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetConfigFile {
+    pub assets: Vec<ExternalAssetConfig>,
 }
 
 // Base mainnet Aave contract addresses
@@ -91,6 +121,192 @@ pub async fn fetch_reserve_indices(
     Ok(reserve_indices)
 }
 
+/// Fetch asset configuration data (decimals, liquidation bonus, etc.) from Aave protocol
+pub async fn fetch_asset_config_data(
+    provider: &impl alloy_provider::Provider,
+    asset_address: Address,
+) -> Result<(u8, u16)> {
+    let protocol_data_provider: Address = BASE_AAVE_PROTOCOL_DATA_PROVIDER.parse()?;
+    
+    let call = IAaveProtocolDataProvider::getReserveConfigurationDataCall {
+        asset: asset_address,
+    };
+    
+    let call_data = call.abi_encode();
+    let call_request = TransactionRequest::default()
+        .to(protocol_data_provider)
+        .input(call_data.into());
+    
+    let result = provider.call(&call_request).await
+        .map_err(|e| eyre::eyre!("Failed to fetch reserve config data for {}: {}", asset_address, e))?;
+    
+    let config_data = IAaveProtocolDataProvider::getReserveConfigurationDataCall::abi_decode_returns(&result, true)
+        .map_err(|e| eyre::eyre!("Failed to decode reserve config data: {}", e))?;
+    
+    let decimals = config_data.decimals as u8;
+    let liquidation_bonus = config_data.liquidationBonus as u16;
+    
+    Ok((decimals, liquidation_bonus))
+}
+
+/// Load asset configurations from a JSON file
+pub fn load_asset_configs_from_file(file_path: impl AsRef<Path>) -> Result<Vec<ExternalAssetConfig>> {
+    let file_path = file_path.as_ref();
+    info!("📁 Loading asset configurations from file: {:?}", file_path);
+    
+    if !file_path.exists() {
+        return Err(eyre::eyre!("Asset config file not found: {:?}", file_path));
+    }
+    
+    let file_content = std::fs::read_to_string(file_path)
+        .map_err(|e| eyre::eyre!("Failed to read asset config file: {}", e))?;
+    
+    let config_file: AssetConfigFile = serde_json::from_str(&file_content)
+        .map_err(|e| eyre::eyre!("Failed to parse asset config file: {}", e))?;
+    
+    info!("✅ Successfully loaded {} asset configurations from file", config_file.assets.len());
+    
+    for asset in &config_file.assets {
+        info!("📋 Loaded asset config: {} ({}) - decimals: {}, liquidation_bonus: {}bps", 
+            asset.symbol, asset.address, asset.decimals, asset.liquidation_bonus);
+    }
+    
+    Ok(config_file.assets)
+}
+
+/// Initialize asset configurations with full dynamic loading from Aave protocol
+pub async fn init_assets_from_protocol(
+    provider: &impl alloy_provider::Provider,
+) -> Result<HashMap<Address, LiquidationAssetConfig>> {
+    info!("🔄 Initializing asset configurations dynamically from Aave protocol...");
+    
+    let reserve_indices = fetch_reserve_indices(provider).await?;
+    let mut assets = HashMap::new();
+
+    // Fetch token symbols
+    let protocol_data_provider: Address = BASE_AAVE_PROTOCOL_DATA_PROVIDER.parse()?;
+    let symbol_call = IAaveProtocolDataProvider::getAllReservesTokensCall {};
+    let symbol_data = provider.call(
+        &TransactionRequest::default()
+            .to(protocol_data_provider)
+            .input(symbol_call.abi_encode().into())
+    ).await
+        .map_err(|e| eyre::eyre!("Failed to fetch token symbols: {}", e))?;
+    let token_data = IAaveProtocolDataProvider::getAllReservesTokensCall::abi_decode_returns(&symbol_data, true)?
+        ._0;
+
+    // Process each reserve dynamically
+    for token in token_data {
+        let asset_address = token.tokenAddress;
+        let symbol = token.symbol;
+        
+        // Get asset index
+        let asset_id = match reserve_indices.get(&asset_address) {
+            Some(&id) => id,
+            None => {
+                warn!("Asset {} ({}) not found in reserves list, skipping", symbol, asset_address);
+                continue;
+            }
+        };
+
+        // Fetch configuration data from protocol
+        match fetch_asset_config_data(provider, asset_address).await {
+            Ok((decimals, liquidation_bonus)) => {
+                // Get reserve configuration to check if asset can be used as collateral/borrowable
+                let call = IAaveProtocolDataProvider::getReserveConfigurationDataCall {
+                    asset: asset_address,
+                };
+                
+                let call_data = call.abi_encode();
+                let call_request = TransactionRequest::default()
+                    .to(protocol_data_provider)
+                    .input(call_data.into());
+                
+                match provider.call(&call_request).await {
+                    Ok(result) => {
+                        match IAaveProtocolDataProvider::getReserveConfigurationDataCall::abi_decode_returns(&result, true) {
+                            Ok(config_data) => {
+                                let asset_config = LiquidationAssetConfig {
+                                    address: asset_address,
+                                    symbol: symbol.clone(),
+                                    decimals,
+                                    asset_id,
+                                    liquidation_bonus,
+                                    is_collateral: config_data.usageAsCollateralEnabled && config_data.isActive && !config_data.isFrozen,
+                                    is_borrowable: config_data.borrowingEnabled && config_data.isActive && !config_data.isFrozen,
+                                };
+                                
+                                info!("✅ Added dynamic asset: {} ({}) - decimals: {}, bonus: {}bps, collateral: {}, borrowable: {}", 
+                                    symbol, asset_address, decimals, liquidation_bonus, 
+                                    asset_config.is_collateral, asset_config.is_borrowable);
+                                
+                                assets.insert(asset_address, asset_config);
+                            }
+                            Err(e) => {
+                                error!("Failed to decode config data for {} ({}): {}", symbol, asset_address, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to fetch config data for {} ({}): {}", symbol, asset_address, e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to fetch asset config data for {} ({}): {}", symbol, asset_address, e);
+            }
+        }
+    }
+
+    info!("✅ Successfully initialized {} assets from Aave protocol", assets.len());
+    Ok(assets)
+}
+
+/// Initialize asset configurations from external config file
+pub async fn init_assets_from_file(
+    provider: &impl alloy_provider::Provider,
+    file_path: impl AsRef<Path>,
+) -> Result<HashMap<Address, LiquidationAssetConfig>> {
+    info!("📁 Initializing asset configurations from file...");
+    
+    let external_configs = load_asset_configs_from_file(file_path)?;
+    let reserve_indices = fetch_reserve_indices(provider).await?;
+    let mut assets = HashMap::new();
+
+    for external_config in external_configs {
+        let asset_address: Address = external_config.address.parse()
+            .map_err(|e| eyre::eyre!("Invalid asset address {}: {}", external_config.address, e))?;
+        
+        let asset_id = match reserve_indices.get(&asset_address) {
+            Some(&id) => id,
+            None => {
+                warn!("Asset {} ({}) not found in Aave reserves list, skipping", 
+                    external_config.symbol, external_config.address);
+                continue;
+            }
+        };
+
+        let asset_config = LiquidationAssetConfig {
+            address: asset_address,
+            symbol: external_config.symbol.clone(),
+            decimals: external_config.decimals,
+            asset_id,
+            liquidation_bonus: external_config.liquidation_bonus,
+            is_collateral: external_config.is_collateral,
+            is_borrowable: external_config.is_borrowable,
+        };
+
+        info!("✅ Added asset from file: {} ({}) - decimals: {}, bonus: {}bps", 
+            external_config.symbol, external_config.address, 
+            external_config.decimals, external_config.liquidation_bonus);
+
+        assets.insert(asset_address, asset_config);
+    }
+
+    info!("✅ Successfully initialized {} assets from config file", assets.len());
+    Ok(assets)
+}
+
 
 /// Initialize asset configurations for Base mainnet with dynamic reserve indices
 pub async fn init_base_mainnet_assets_async(
@@ -104,12 +320,19 @@ pub async fn init_base_mainnet_assets_async(
     let weth_asset_id = *reserve_indices.get(&weth_address)
         .ok_or_else(|| eyre::eyre!("WETH not found in Aave reserves list"))?;
     
+    // Fetch dynamic configuration data for WETH
+    let (weth_decimals, weth_liquidation_bonus) = fetch_asset_config_data(provider, weth_address).await
+        .unwrap_or_else(|e| {
+            warn!("Failed to fetch WETH config data dynamically, using fallback: {}", e);
+            (18, 500) // Fallback values
+        });
+    
     let weth = LiquidationAssetConfig {
         address: weth_address,
         symbol: "WETH".to_string(),
-        decimals: 18,
+        decimals: weth_decimals,
         asset_id: weth_asset_id,    // Dynamically fetched
-        liquidation_bonus: 500, // 5% liquidation bonus
+        liquidation_bonus: weth_liquidation_bonus, // Dynamically fetched
         is_collateral: true,
         is_borrowable: true,
     };
@@ -120,12 +343,19 @@ pub async fn init_base_mainnet_assets_async(
     let usdc_asset_id = *reserve_indices.get(&usdc_address)
         .ok_or_else(|| eyre::eyre!("USDC not found in Aave reserves list"))?;
     
+    // Fetch dynamic configuration data for USDC
+    let (usdc_decimals, usdc_liquidation_bonus) = fetch_asset_config_data(provider, usdc_address).await
+        .unwrap_or_else(|e| {
+            warn!("Failed to fetch USDC config data dynamically, using fallback: {}", e);
+            (6, 450) // Fallback values
+        });
+    
     let usdc = LiquidationAssetConfig {
         address: usdc_address,
         symbol: "USDC".to_string(),
-        decimals: 6,
+        decimals: usdc_decimals,
         asset_id: usdc_asset_id,    // Dynamically fetched
-        liquidation_bonus: 450, // 4.5% liquidation bonus
+        liquidation_bonus: usdc_liquidation_bonus, // Dynamically fetched
         is_collateral: true,
         is_borrowable: true,
     };
@@ -136,18 +366,25 @@ pub async fn init_base_mainnet_assets_async(
     let cbeth_asset_id = *reserve_indices.get(&cbeth_address)
         .ok_or_else(|| eyre::eyre!("cbETH not found in Aave reserves list"))?;
     
+    // Fetch dynamic configuration data for cbETH
+    let (cbeth_decimals, cbeth_liquidation_bonus) = fetch_asset_config_data(provider, cbeth_address).await
+        .unwrap_or_else(|e| {
+            warn!("Failed to fetch cbETH config data dynamically, using fallback: {}", e);
+            (18, 700) // Fallback values
+        });
+    
     let cbeth = LiquidationAssetConfig {
         address: cbeth_address,
         symbol: "cbETH".to_string(),
-        decimals: 18,
+        decimals: cbeth_decimals,
         asset_id: cbeth_asset_id,   // Dynamically fetched
-        liquidation_bonus: 700, // 7% liquidation bonus (higher risk)
+        liquidation_bonus: cbeth_liquidation_bonus, // Dynamically fetched
         is_collateral: true,
         is_borrowable: false,
     };
     assets.insert(cbeth.address, cbeth);
 
-    info!("✅ Successfully initialized {} assets with dynamic indices", assets.len());
+    info!("✅ Successfully initialized {} assets with dynamic indices and config data", assets.len());
     Ok(assets)
 }
 

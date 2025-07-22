@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::config::BotConfig;
+use crate::config::{AssetLoadingMethod, BotConfig};
 use crate::database;
 use crate::events::BotEvent;
 use crate::liquidation;
@@ -90,28 +90,62 @@ where
         // Initialize asset configurations for Base Sepolia
         let asset_configs = oracle::init_asset_configs();
 
-        // Initialize liquidation asset configurations
-        // Initialize liquidation asset configurations with dynamic reserve indices
-        let liquidation_assets = match liquidation::assets::init_base_mainnet_assets_async(
-            &*provider,
-        )
-        .await
-        {
-            Ok(assets) => {
-                info!("✅ Successfully loaded asset configurations with dynamic reserve indices from Aave protocol");
-                assets
+        // Initialize liquidation asset configurations based on configuration
+        let liquidation_assets = match &config.asset_loading_method {
+            AssetLoadingMethod::FullyDynamic => {
+                info!("🔄 Loading all assets dynamically from Aave protocol...");
+                match liquidation::assets::init_assets_from_protocol(&*provider).await {
+                    Ok(assets) => {
+                        info!("✅ Successfully loaded {} assets dynamically from Aave protocol", assets.len());
+                        assets
+                    }
+                    Err(e) => {
+                        error!("❌ Failed to load assets dynamically from Aave protocol: {}", e);
+                        error!("🔄 Falling back to hardcoded asset configurations");
+                        liquidation::assets::init_base_mainnet_assets()
+                    }
+                }
             }
-            Err(e) => {
-                error!("❌ Failed to fetch dynamic reserve indices from Aave protocol");
-                error!("📋 Error details: {}", e);
-                warn!("🔄 Falling back to hardcoded asset configurations");
-                warn!("⚠️  IMPORTANT: This fallback uses hardcoded asset IDs which may become incorrect");
-                warn!("⚠️  if Aave's reserve list ordering changes over time!");
-                warn!("🔍 To fix this issue:");
-                warn!("   1. Verify the correct Aave V3 contract addresses for Base mainnet");
-                warn!("   2. Update BASE_POOL_ADDRESSES_PROVIDER and BASE_UI_POOL_DATA_PROVIDER");
-                warn!("   3. Check if Aave V3 is actually deployed on Base network");
+            AssetLoadingMethod::FromFile(file_path) => {
+                info!("📁 Loading assets from config file: {}", file_path);
+                match liquidation::assets::init_assets_from_file(&*provider, file_path).await {
+                    Ok(assets) => {
+                        info!("✅ Successfully loaded {} assets from config file", assets.len());
+                        assets
+                    }
+                    Err(e) => {
+                        error!("❌ Failed to load assets from config file: {}", e);
+                        error!("🔄 Falling back to hardcoded asset configurations");
+                        liquidation::assets::init_base_mainnet_assets()
+                    }
+                }
+            }
+            AssetLoadingMethod::Hardcoded => {
+                info!("🔧 Using hardcoded asset configurations");
+                warn!("⚠️  IMPORTANT: Using hardcoded asset configurations");
+                warn!("⚠️  Asset IDs may become incorrect if Aave's reserve list changes!");
                 liquidation::assets::init_base_mainnet_assets()
+            }
+            AssetLoadingMethod::DynamicWithFallback => {
+                info!("🔄 Loading assets with dynamic metadata and fallback support...");
+                match liquidation::assets::init_base_mainnet_assets_async(&*provider).await {
+                    Ok(assets) => {
+                        info!("✅ Successfully loaded asset configurations with dynamic data from Aave protocol");
+                        assets
+                    }
+                    Err(e) => {
+                        error!("❌ Failed to fetch dynamic asset data from Aave protocol");
+                        error!("📋 Error details: {}", e);
+                        warn!("🔄 Falling back to hardcoded asset configurations");
+                        warn!("⚠️  IMPORTANT: This fallback uses hardcoded asset IDs which may become incorrect");
+                        warn!("⚠️  if Aave's reserve list ordering changes over time!");
+                        warn!("🔍 To fix this issue:");
+                        warn!("   1. Verify the correct Aave V3 contract addresses for Base mainnet");
+                        warn!("   2. Update BASE_POOL_ADDRESSES_PROVIDER and BASE_UI_POOL_DATA_PROVIDER");
+                        warn!("   3. Check if Aave V3 is actually deployed on Base network");
+                        liquidation::assets::init_base_mainnet_assets()
+                    }
+                }
             }
         };
 
