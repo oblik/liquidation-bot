@@ -434,7 +434,7 @@ where
     /// Populate users_by_collateral mapping for all users in the database
     async fn populate_initial_collateral_mapping(&self) -> Result<()> {
         // Get all users from database
-        let all_users = match database::get_all_users(&self.db_pool).await {
+        let all_users = match database::get_all_user_positions(&self.db_pool).await {
             Ok(users) => users,
             Err(e) => {
                 error!("Failed to get all users from database: {}", e);

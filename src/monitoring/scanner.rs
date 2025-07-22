@@ -564,66 +564,174 @@ where
     P: Provider,
 {
     info!("Starting periodic position scan...");
+    
+    // Log configuration
+    match config.at_risk_scan_limit {
+        Some(limit) => info!("🔧 At-risk scan limit configured: {} users per cycle", limit),
+        None => info!("🔧 At-risk scan limit: unlimited"),
+    }
+    info!("🔧 Full rescan interval: {} minutes", config.full_rescan_interval_minutes);
 
     let mut interval = tokio::time::interval(
         tokio::time::Duration::from_secs(config.monitoring_interval_secs * 6), // Slower than event-driven updates
     );
+    
+    let mut full_rescan_interval = tokio::time::interval(
+        tokio::time::Duration::from_secs(config.full_rescan_interval_minutes * 60), // Full rescan interval
+    );
+    
+    let mut last_full_rescan = std::time::Instant::now();
 
     loop {
-        interval.tick().await;
+        tokio::select! {
+            _ = interval.tick() => {
+                // Regular at-risk scan with configurable limit
+                let at_risk_users = match crate::database::get_at_risk_users_with_limit(&db_pool, config.at_risk_scan_limit).await {
+                    Ok(users) => users,
+                    Err(e) => {
+                        error!("Failed to get at-risk users: {}", e);
+                        continue;
+                    }
+                };
 
-        // Get at-risk users from database
-        let at_risk_users = match database::get_at_risk_users(&db_pool).await {
-            Ok(users) => users,
-            Err(e) => {
-                error!("Failed to get at-risk users: {}", e);
-                continue;
-            }
-        };
+                let scan_type = match config.at_risk_scan_limit {
+                    Some(limit) => format!("regular (limited to {} users)", limit),
+                    None => "regular (unlimited)".to_string(),
+                };
+                info!("🔍 Starting {} scan: {} at-risk users", scan_type, at_risk_users.len());
 
-        info!("Scanning {} at-risk users", at_risk_users.len());
+                // Check health for each user with rate limiting
+                let mut checked_users = 0;
+                let mut at_risk_users_count = 0;
 
-        // Check health for each user with rate limiting
-        let mut checked_users = 0;
-        let mut at_risk_users_count = 0;
-
-        for user in &at_risk_users {
-            // Add small delay between checks to avoid rate limiting
-            if checked_users > 0 && checked_users % 10 == 0 {
-                sleep(Duration::from_millis(200)).await; // Brief pause every 10 users
-            }
-
-            match check_user_health(&provider, pool_address, user.address, 3).await {
-                Ok(position) => {
-                    checked_users += 1;
-
-                    if position.is_at_risk {
-                        at_risk_users_count += 1;
-                        info!(
-                            "⚠️  At-risk user found: {:?} (HF: {})",
-                            user,
-                            format_health_factor(position.health_factor)
-                        );
-
-                        // Store in database
-                        if let Err(e) =
-                            crate::database::save_user_position(&db_pool, &position).await
-                        {
-                            error!("Failed to store user position: {}", e);
-                        }
-
-                        // Send to liquidation opportunity channel
-                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
-                            warn!("Failed to send liquidation opportunity: {}", e);
-                        }
+                for user in &at_risk_users {
+                    // Add small delay between checks to avoid rate limiting
+                    if checked_users > 0 && checked_users % 10 == 0 {
+                        sleep(Duration::from_millis(200)).await; // Brief pause every 10 users
                     }
 
-                    // Brief delay between individual checks
-                    sleep(Duration::from_millis(50)).await;
+                    match check_user_health(&provider, pool_address, user.address, 3).await {
+                        Ok(position) => {
+                            checked_users += 1;
+
+                            if position.is_at_risk {
+                                at_risk_users_count += 1;
+                                info!(
+                                    "⚠️  At-risk user found: {:?} (HF: {})",
+                                    user,
+                                    format_health_factor(position.health_factor)
+                                );
+
+                                // Store in database
+                                if let Err(e) =
+                                    crate::database::save_user_position(&db_pool, &position).await
+                                {
+                                    error!("Failed to store user position: {}", e);
+                                }
+
+                                // Send to liquidation opportunity channel
+                                if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                    warn!("Failed to send liquidation opportunity: {}", e);
+                                }
+                            }
+
+                            // Brief delay between individual checks
+                            sleep(Duration::from_millis(50)).await;
+                        }
+                        Err(e) => {
+                            error!("Failed to check user health for {:?}: {}", user, e);
+                            // Continue with next user rather than failing completely
+                        }
+                    }
                 }
-                Err(e) => {
-                    error!("Failed to check user health for {:?}: {}", user, e);
-                    // Continue with next user rather than failing completely
+
+                info!(
+                    "✅ Regular scan complete: {} checked, {} at-risk found",
+                    checked_users, at_risk_users_count
+                );
+            }
+            _ = full_rescan_interval.tick() => {
+                // Full rescan: check all users to ensure complete coverage
+                info!("🔍 Starting full rescan: checking all users to ensure complete coverage");
+                
+                let all_users = match crate::database::get_all_users(&db_pool).await {
+                    Ok(users) => users,
+                    Err(e) => {
+                        error!("Failed to get all users for full rescan: {}", e);
+                        continue;
+                    }
+                };
+
+                info!("🔍 Full rescan: {} total users to check", all_users.len());
+                
+                let mut checked_users = 0;
+                let mut at_risk_users_count = 0;
+                let mut new_at_risk_found = 0;
+
+                for user in &all_users {
+                    // Add small delay between checks to avoid rate limiting
+                    if checked_users > 0 && checked_users % 50 == 0 {
+                        sleep(Duration::from_millis(500)).await; // Longer pause for full scans
+                        info!("🔍 Full rescan progress: {}/{} users checked", checked_users, all_users.len());
+                    }
+
+                    match check_user_health(&provider, pool_address, user.address, 3).await {
+                        Ok(position) => {
+                            checked_users += 1;
+
+                            // Update the position in database
+                            if let Err(e) = crate::database::save_user_position(&db_pool, &position).await {
+                                error!("Failed to store user position during full rescan: {}", e);
+                            }
+
+                            if position.is_at_risk {
+                                at_risk_users_count += 1;
+                                
+                                // Check if this user was not previously at-risk
+                                if !user.is_at_risk {
+                                    new_at_risk_found += 1;
+                                    warn!(
+                                        "🚨 NEW AT-RISK USER discovered in full rescan: {:?} (HF: {})",
+                                        user.address,
+                                        format_health_factor(position.health_factor)
+                                    );
+                                    
+                                    // Send to liquidation opportunity channel
+                                    if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                        warn!("Failed to send liquidation opportunity: {}", e);
+                                    }
+                                }
+                            }
+
+                            // Brief delay between individual checks
+                            sleep(Duration::from_millis(100)).await; // Slightly longer for full scans
+                        }
+                        Err(e) => {
+                            error!("Failed to check user health during full rescan for {:?}: {}", user.address, e);
+                            // Continue with next user rather than failing completely
+                        }
+                    }
+                }
+
+                last_full_rescan = std::time::Instant::now();
+                
+                info!(
+                    "✅ Full rescan complete: {}/{} users checked, {} at-risk found, {} new at-risk discovered",
+                    checked_users, all_users.len(), at_risk_users_count, new_at_risk_found
+                );
+
+                if let Err(e) = crate::database::log_monitoring_event(
+                    &db_pool,
+                    "full_rescan_complete",
+                    None,
+                    Some(&format!(
+                        "checked:{}, total:{}, at_risk:{}, new_at_risk:{}",
+                        checked_users, all_users.len(), at_risk_users_count, new_at_risk_found
+                    )),
+                )
+                .await
+                {
+                    error!("Failed to log full rescan completion: {}", e);
                 }
             }
         }
@@ -631,29 +739,6 @@ where
         // If we have a specific target user, always check them
         if let Some(target_user) = config.target_user {
             let _ = event_tx.send(BotEvent::UserPositionChanged(target_user));
-        }
-
-        info!(
-            "📊 Status Report: {} positions tracked, {} at risk, {} liquidatable",
-            at_risk_users.len(),
-            at_risk_users_count,
-            at_risk_users.len() - at_risk_users_count
-        );
-
-        if let Err(e) = database::log_monitoring_event(
-            &db_pool,
-            "status_report",
-            None,
-            Some(&format!(
-                "positions:{}, at_risk:{}, liquidatable:{}",
-                at_risk_users.len(),
-                at_risk_users_count,
-                at_risk_users.len() - at_risk_users_count
-            )),
-        )
-        .await
-        {
-            error!("Failed to log status report: {}", e);
         }
     }
 }

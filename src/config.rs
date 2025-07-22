@@ -30,6 +30,8 @@ pub struct BotConfig {
                                         // Should be > 1.0 (liquidation threshold) for early warning
     pub monitoring_interval_secs: u64,
     pub asset_loading_method: AssetLoadingMethod,
+    pub at_risk_scan_limit: Option<usize>, // Max users to check per scan cycle (None = unlimited)
+    pub full_rescan_interval_minutes: u64, // How often to do a full rescan in minutes
 }
 
 impl BotConfig {
@@ -159,6 +161,48 @@ impl BotConfig {
             Err(_) => AssetLoadingMethod::DynamicWithFallback,
         };
 
+        let at_risk_scan_limit = match std::env::var("AT_RISK_SCAN_LIMIT") {
+            Ok(limit_str) => match limit_str.parse::<usize>() {
+                Ok(limit) => {
+                    if limit == 0 {
+                        warn!("AT_RISK_SCAN_LIMIT cannot be 0. Using unlimited scanning.");
+                        None
+                    } else {
+                        Some(limit)
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Invalid AT_RISK_SCAN_LIMIT '{}': {}. Using unlimited scanning.",
+                        limit_str, e
+                    );
+                    None
+                }
+            },
+            Err(_) => None, // Default to unlimited scanning
+        };
+
+        let full_rescan_interval_minutes = match std::env::var("FULL_RESCAN_INTERVAL_MINUTES") {
+            Ok(interval_str) => match interval_str.parse::<u64>() {
+                Ok(interval) => {
+                    if interval == 0 {
+                        warn!("FULL_RESCAN_INTERVAL_MINUTES cannot be 0. Using default 60 minutes.");
+                        60
+                    } else {
+                        interval
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Invalid FULL_RESCAN_INTERVAL_MINUTES '{}': {}. Using default 60 minutes.",
+                        interval_str, e
+                    );
+                    60
+                }
+            },
+            Err(_) => 60, // Default to 60 minutes
+        };
+
         Ok(Self {
             rpc_url,
             ws_url,
@@ -171,6 +215,8 @@ impl BotConfig {
             health_factor_threshold,
             monitoring_interval_secs,
             asset_loading_method,
+            at_risk_scan_limit,
+            full_rescan_interval_minutes,
         })
     }
 }
