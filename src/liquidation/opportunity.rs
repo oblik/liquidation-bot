@@ -8,7 +8,7 @@ use tracing::{debug, error, info, warn};
 
 use super::{assets, executor, profitability};
 use crate::database;
-use crate::models::UserPosition;
+use crate::models::{LiquidationAssetConfig, UserPosition};
 
 /// Fetch user's actual collateral and debt assets from the blockchain
 async fn get_user_assets<P>(
@@ -113,6 +113,7 @@ pub async fn handle_liquidation_opportunity<P>(
     liquidator_contract_address: Option<Address>,
     signer: Option<alloy_signer_local::PrivateKeySigner>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
+    asset_configs: &std::collections::HashMap<Address, LiquidationAssetConfig>,
 ) -> Result<()>
 where
     P: Provider + 'static,
@@ -156,7 +157,7 @@ where
     };
 
     // Initialize asset configurations
-    let asset_configs = assets::init_base_mainnet_assets();
+    // Use the passed asset_configs (with dynamic reserve indices)
 
     // Fetch user's actual collateral and debt assets from the blockchain
     let (user_collateral_assets, user_debt_assets) =
@@ -182,7 +183,7 @@ where
 
     // Find the best liquidation pair
     let (collateral_asset_addr, debt_asset_addr) = match assets::find_best_liquidation_pair(
-        &asset_configs,
+        asset_configs,
         &user_collateral_assets,
         &user_debt_assets,
     ) {
@@ -194,9 +195,9 @@ where
     };
 
     // Get asset configurations
-    let collateral_asset = assets::get_asset_config(&asset_configs, collateral_asset_addr)
+    let collateral_asset = assets::get_asset_config(asset_configs, collateral_asset_addr)
         .ok_or_else(|| eyre::eyre!("Collateral asset config not found"))?;
-    let debt_asset = assets::get_asset_config(&asset_configs, debt_asset_addr)
+    let debt_asset = assets::get_asset_config(asset_configs, debt_asset_addr)
         .ok_or_else(|| eyre::eyre!("Debt asset config not found"))?;
 
     info!(
@@ -238,8 +239,12 @@ where
     match (liquidator_contract_address, signer) {
         (Some(contract_addr), Some(signer)) => {
             // Create liquidation executor
-            let executor =
-                executor::LiquidationExecutor::new(provider.clone(), signer, contract_addr)?;
+            let executor = executor::LiquidationExecutor::new(
+                provider.clone(),
+                signer,
+                contract_addr,
+                asset_configs.clone(),
+            )?;
 
             // Verify contract setup
             if let Err(e) = executor.verify_contract_setup().await {

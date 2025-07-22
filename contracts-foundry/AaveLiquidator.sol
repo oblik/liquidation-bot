@@ -72,7 +72,7 @@ contract AaveLiquidator is IFlashLoanReceiver, Ownable, ReentrancyGuard {
         SWAP_ROUTER = _swapRouter;
 
         // Hardcoded Aave V3 Base DataProvider address to avoid dynamic lookup revert
-        DATA_PROVIDER = 0x2d8A3C5677189723C4cB8873CfC9C8976FDF38Ac;
+        DATA_PROVIDER = 0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D;
     }
 
     function POOL() external view returns (IPool) {
