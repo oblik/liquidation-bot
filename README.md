@@ -212,16 +212,6 @@ MIN_PROFIT_THRESHOLD=10000000000000000    # Minimum profit in wei (0.01 ETH)
 HEALTH_FACTOR_THRESHOLD=1100000000000000000 # At-risk threshold (1.1)
 ```
 
-## 🚨 Recent Bug Fixes
-
-Several critical issues have been resolved:
-
-- **Memory Leak**: Fixed unbounded task spawning in processing guards
-- **Address Mismatch**: Made contract addresses network-configurable  
-- **WebSocket Fallback**: Implemented getLogs-based polling for reliability
-
-See `bugs-fixed.md` for detailed technical information.
-
 ## 🛡️ Security
 
 - Private key management with hardware wallet support
