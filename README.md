@@ -179,12 +179,56 @@ See `bugs-fixed.md` for detailed technical information.
 - **Resilient**: Automatic fallback to HTTP polling if WebSocket fails
 - **Cost-effective**: L2Pool optimization provides 60%+ gas savings
 
+## 🛠️ Development
+
+### Code Quality Tools
+
+This project uses Rust's standard linting and formatting tools to maintain high code quality:
+
+```bash
+# Format code
+cargo fmt
+
+# Run linting
+cargo clippy --all-targets --all-features -- -D warnings
+
+# Run all quality checks
+./scripts/check.sh
+
+# Auto-fix issues where possible
+./scripts/fix.sh
+```
+
+### Configuration
+
+- **`clippy.toml`**: Clippy linting rules optimized for financial software
+- **`rustfmt.toml`**: Code formatting configuration for consistency
+- **`.github/workflows/ci.yml`**: CI pipeline with automated quality checks
+
+### Pre-commit Requirements
+
+All code must pass these checks before being committed:
+- ✅ Code formatting (`cargo fmt`)
+- ✅ Clippy linting with no warnings
+- ✅ All tests passing
+- ✅ Successful release build
+
 ## 🤝 Contributing
 
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development guidelines including:
+
+- Development setup and prerequisites
+- Code quality standards and tools
+- Testing strategies and requirements
+- Pull request workflow
+- Security considerations for financial software
+
+Quick contribution steps:
 1. Follow the [roadmap](docs/ROADMAP.md) for current priorities
 2. Check [bugs-fixed.md](bugs-fixed.md) for resolved issues
-3. Add tests for new features
-4. Update documentation as needed
+3. Ensure all quality checks pass: `./scripts/check.sh`
+4. Add comprehensive tests for new features
+5. Update documentation as needed
 
 ## 📄 License
 

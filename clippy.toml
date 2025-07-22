@@ -1,0 +1,42 @@
+# Clippy configuration for liquidation-bot
+# This file configures Clippy to enforce code quality and consistency
+
+# Deny certain lints that are important for production financial software
+too-many-arguments-threshold = 7
+type-complexity-threshold = 250
+single-char-lifetime-names = true
+trivial-casts = true
+unused-lifetimes = true
+unused-import-braces = true
+
+# Enable pedantic lints for high code quality
+# Most pedantic lints will be allowed but some important ones are configured
+doc-markdown = true
+missing-errors-doc = true
+missing-panics-doc = true
+
+# Configure specific lints for financial/trading applications
+# These are important for preventing bugs in financial calculations
+cast-precision-loss = "warn"
+cast-possible-truncation = "warn" 
+cast-possible-wrap = "warn"
+cast-sign-loss = "warn"
+float-arithmetic = "warn"
+integer-arithmetic = "warn"
+
+# Performance-related lints
+inefficient-to-string = "warn"
+implicit-clone = "warn"
+clone-on-ref-ptr = "warn"
+
+# Security and safety lints
+unwrap-used = "warn"
+expect-used = "warn"
+panic = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+# Style consistency
+enum-variant-names = true
+module-name-repetitions = true
+similar-names = true

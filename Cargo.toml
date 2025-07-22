@@ -2,6 +2,14 @@
 name = "liquidation-bot"
 version = "0.1.0"
 edition = "2021"
+authors = ["Liquidation Bot Team"]
+description = "A production-ready Aave v3 liquidation bot for Base network"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/your-org/liquidation-bot"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 # Core async runtime
