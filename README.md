@@ -10,6 +10,7 @@ A production-ready Aave v3 liquidation bot for Base network, built with Rust and
 - **📊 Database Persistence**: SQLite/PostgreSQL support for position tracking
 - **🔧 Base Mainnet Optimized**: Fully optimized for Base network with L2Pool integration
 - **🛡️ Production Hardened**: Comprehensive error handling and recovery mechanisms
+- **🚀 PostgreSQL Migration**: Built-in migration tool for upgrading from SQLite to PostgreSQL
 
 ## 📋 Quick Start
 
@@ -18,6 +19,7 @@ A production-ready Aave v3 liquidation bot for Base network, built with Rust and
 - Foundry (for smart contract development)
 - Base mainnet RPC access (HTTP + WebSocket)
 - Private key with sufficient ETH for gas fees
+- PostgreSQL
 
 ⚠️ **Important**: This bot operates exclusively on Base mainnet for all environments including development and testing.
 
@@ -45,7 +47,10 @@ PRIVATE_KEY=your_private_key_here
 # Optional Configuration
 LIQUIDATOR_CONTRACT=0xYourDeployedContractAddress
 MIN_PROFIT_THRESHOLD=10000000000000000  # 0.01 ETH in wei
-DATABASE_URL=sqlite:liquidation_bot.db
+
+# Database
+DATABASE_URL=postgresql://username:password@localhost/liquidation_bot
+
 RUST_LOG=info
 ```
 
@@ -65,9 +70,6 @@ cargo run --release
 
 # Debug mode
 RUST_LOG=debug cargo run
-
-# Test liquidation scenarios
-cargo run --bin test_liquidation
 ```
 
 ## 🏗️ Architecture

@@ -5,7 +5,7 @@ use alloy_signer_local::PrivateKeySigner;
 use dashmap::DashMap;
 use eyre::Result;
 use parking_lot::RwLock as SyncRwLock;
-use sqlx::{Pool, Sqlite};
+use crate::database::DatabasePool;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -28,7 +28,7 @@ pub struct LiquidationBot<P> {
     pub config: BotConfig,
     pool_contract: ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     _liquidator_contract: Option<ContractInstance<alloy_transport::BoxTransport, Arc<P>>>,
-    db_pool: Pool<Sqlite>,
+    db_pool: DatabasePool,
     user_positions: Arc<DashMap<Address, UserPosition>>,
     processing_users: Arc<SyncRwLock<HashSet<Address>>>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
@@ -293,7 +293,7 @@ where
                                 "🔍 Triggering health check for at-risk user from DB: {:?}",
                                 user
                             );
-                            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user));
+                            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user.address));
                         }
                     }
                     Err(e) => {
@@ -392,7 +392,7 @@ where
 
         for user in all_users {
             // Trigger a user position update to populate collateral mapping
-            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user));
+            let _ = self.event_tx.send(BotEvent::UserPositionChanged(user.address));
             processed_count += 1;
 
             // Add small delay to avoid overwhelming the system

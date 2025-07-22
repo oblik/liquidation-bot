@@ -1,198 +1,510 @@
 use crate::models::UserPosition;
 use alloy_primitives::Address;
 use eyre::Result;
-use sqlx::{Pool, Row, Sqlite};
+use sqlx::{Pool, Postgres, Sqlite, Row};
 use tracing::info;
 
-pub async fn init_database(database_url: &str) -> Result<Pool<Sqlite>> {
-    let pool = sqlx::SqlitePool::connect(database_url).await?;
+/// Database connection enum that can hold either PostgreSQL or SQLite connections
+#[derive(Clone)]
+pub enum DatabasePool {
+    Postgres(Pool<Postgres>),
+    Sqlite(Pool<Sqlite>),
+}
 
-    // Verify database connection is working
-    sqlx::query("SELECT 1")
-        .fetch_one(&pool)
-        .await
-        .map_err(|e| eyre::eyre!("Database connection verification failed: {}", e))?;
+impl DatabasePool {
+    /// Execute a query
+    pub async fn execute(&self, query: &str) -> Result<u64, sqlx::Error> {
+        match self {
+            DatabasePool::Postgres(pool) => {
+                let result = sqlx::query(query).execute(pool).await?;
+                Ok(result.rows_affected())
+            }
+            DatabasePool::Sqlite(pool) => {
+                let result = sqlx::query(query).execute(pool).await?;
+                Ok(result.rows_affected())
+            }
+        }
+    }
+}
 
-    // Create tables if they don't exist
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS user_positions (
-            address TEXT PRIMARY KEY,
-            total_collateral_base TEXT NOT NULL,
-            total_debt_base TEXT NOT NULL,
-            available_borrows_base TEXT NOT NULL,
-            current_liquidation_threshold TEXT NOT NULL,
-            ltv TEXT NOT NULL,
-            health_factor TEXT NOT NULL,
-            last_updated DATETIME NOT NULL,
-            is_at_risk BOOLEAN NOT NULL DEFAULT FALSE
-        )
-    "#,
-    )
-    .execute(&pool)
-    .await?;
+/// Detect database type from connection string
+fn detect_database_type(database_url: &str) -> Result<&'static str> {
+    if database_url.starts_with("postgresql://") || database_url.starts_with("postgres://") {
+        Ok("postgres")
+    } else if database_url.starts_with("sqlite:") {
+        Ok("sqlite")
+    } else {
+        Err(eyre::eyre!("Unsupported database type in URL: {}", database_url))
+    }
+}
 
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS liquidation_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_address TEXT NOT NULL,
-            collateral_asset TEXT NOT NULL,
-            debt_asset TEXT NOT NULL,
-            debt_covered TEXT NOT NULL,
-            collateral_received TEXT NOT NULL,
-            profit TEXT NOT NULL,
-            tx_hash TEXT,
-            block_number INTEGER,
-            timestamp DATETIME NOT NULL
-        )
-    "#,
-    )
-    .execute(&pool)
-    .await?;
+/// Initialize database with automatic type detection
+pub async fn init_database(database_url: &str) -> Result<DatabasePool> {
+    let db_type = detect_database_type(database_url)?;
+    info!("Detected database type: {}", db_type);
 
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS monitoring_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT NOT NULL,
-            user_address TEXT,
-            asset_address TEXT,
-            health_factor TEXT,
-            timestamp DATETIME NOT NULL,
-            details TEXT
-        )
-    "#,
-    )
-    .execute(&pool)
-    .await?;
+    let pool = match db_type {
+        "postgres" => {
+            info!("🐘 Connecting to PostgreSQL database...");
+            let pool = Pool::<Postgres>::connect(database_url).await?;
+            DatabasePool::Postgres(pool)
+        }
+        "sqlite" => {
+            info!("🗄️ Connecting to SQLite database...");
+            let pool = Pool::<Sqlite>::connect(database_url).await?;
+            DatabasePool::Sqlite(pool)
+        }
+        _ => return Err(eyre::eyre!("Unsupported database type: {}", db_type)),
+    };
 
-    // Create table for price data
-    sqlx::query(
-        r#"
-        CREATE TABLE IF NOT EXISTS price_feeds (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            asset_address TEXT NOT NULL,
-            asset_symbol TEXT NOT NULL,
-            price TEXT NOT NULL,
-            timestamp DATETIME NOT NULL
-        )
-    "#,
-    )
-    .execute(&pool)
-    .await?;
-
-    // Create index for price feeds
-    sqlx::query(
-        r#"
-        CREATE INDEX IF NOT EXISTS idx_asset_timestamp 
-        ON price_feeds (asset_address, timestamp)
-    "#,
-    )
-    .execute(&pool)
-    .await?;
-
-    info!("Database initialized successfully");
+    // Create tables
+    create_tables(&pool).await?;
     Ok(pool)
 }
 
-pub async fn save_user_position(db_pool: &Pool<Sqlite>, position: &UserPosition) -> Result<()> {
-    let address_str = position.address.to_string();
-    tracing::debug!(
-        "💾 Saving user position to database: {} (stored as: {})",
-        position.address,
-        address_str
-    );
-    tracing::debug!(
-        "💾 Position details: HF={}, debt={}, collateral={}, at_risk={}",
-        position.health_factor,
-        position.total_debt_base,
-        position.total_collateral_base,
-        position.is_at_risk
-    );
+/// Create database tables for both PostgreSQL and SQLite
+pub async fn create_tables(db_pool: &DatabasePool) -> Result<()> {
+    match db_pool {
+        DatabasePool::Postgres(pool) => {
+            info!("Creating PostgreSQL tables...");
+            
+            // Create user_positions table with PostgreSQL syntax
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS user_positions (
+                    address VARCHAR PRIMARY KEY,
+                    total_collateral_base VARCHAR NOT NULL,
+                    total_debt_base VARCHAR NOT NULL,
+                    available_borrows_base VARCHAR NOT NULL,
+                    current_liquidation_threshold VARCHAR NOT NULL,
+                    ltv VARCHAR NOT NULL,
+                    health_factor VARCHAR NOT NULL,
+                    last_updated TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    is_at_risk BOOLEAN NOT NULL DEFAULT FALSE
+                );
+                "#,
+            )
+            .execute(pool)
+            .await?;
 
-    let result = sqlx::query(
-        r#"
-        INSERT OR REPLACE INTO user_positions 
-        (address, total_collateral_base, total_debt_base, available_borrows_base, 
-         current_liquidation_threshold, ltv, health_factor, last_updated, is_at_risk)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(address_str.clone())
-    .bind(position.total_collateral_base.to_string())
-    .bind(position.total_debt_base.to_string())
-    .bind(position.available_borrows_base.to_string())
-    .bind(position.current_liquidation_threshold.to_string())
-    .bind(position.ltv.to_string())
-    .bind(position.health_factor.to_string())
-    .bind(position.last_updated)
-    .bind(position.is_at_risk)
-    .execute(db_pool)
-    .await?;
+            // Create liquidation_events table
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS liquidation_events (
+                    id SERIAL PRIMARY KEY,
+                    user_address VARCHAR NOT NULL,
+                    collateral_asset VARCHAR NOT NULL,
+                    debt_asset VARCHAR NOT NULL,
+                    debt_covered VARCHAR NOT NULL,
+                    collateral_received VARCHAR NOT NULL,
+                    profit VARCHAR NOT NULL,
+                    tx_hash VARCHAR,
+                    block_number BIGINT,
+                    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                "#,
+            )
+            .execute(pool)
+            .await?;
 
-    tracing::debug!(
-        "✅ Database save completed successfully for {} (rows affected: {})",
-        address_str,
-        result.rows_affected()
-    );
+            // Create indexes
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_user_positions_health_factor ON user_positions(health_factor);")
+                .execute(pool)
+                .await?;
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_user_positions_is_at_risk ON user_positions(is_at_risk);")
+                .execute(pool)
+                .await?;
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_liquidation_events_timestamp ON liquidation_events(timestamp);")
+                .execute(pool)
+                .await?;
+        }
+        DatabasePool::Sqlite(pool) => {
+            info!("Creating SQLite tables...");
+            
+            // Create user_positions table with SQLite syntax
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS user_positions (
+                    address TEXT PRIMARY KEY,
+                    total_collateral_base TEXT NOT NULL,
+                    total_debt_base TEXT NOT NULL,
+                    available_borrows_base TEXT NOT NULL,
+                    current_liquidation_threshold TEXT NOT NULL,
+                    ltv TEXT NOT NULL,
+                    health_factor TEXT NOT NULL,
+                    last_updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    is_at_risk BOOLEAN NOT NULL DEFAULT 0
+                );
+                "#,
+            )
+            .execute(pool)
+            .await?;
+
+            // Create liquidation_events table
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS liquidation_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_address TEXT NOT NULL,
+                    collateral_asset TEXT NOT NULL,
+                    debt_asset TEXT NOT NULL,
+                    debt_covered TEXT NOT NULL,
+                    collateral_received TEXT NOT NULL,
+                    profit TEXT NOT NULL,
+                    tx_hash TEXT,
+                    block_number INTEGER,
+                    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                "#,
+            )
+            .execute(pool)
+            .await?;
+
+            // Create indexes
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_user_positions_health_factor ON user_positions(health_factor);")
+                .execute(pool)
+                .await?;
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_user_positions_is_at_risk ON user_positions(is_at_risk);")
+                .execute(pool)
+                .await?;
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_liquidation_events_timestamp ON liquidation_events(timestamp);")
+                .execute(pool)
+                .await?;
+        }
+    }
+
+    info!("✅ Database tables created successfully");
     Ok(())
 }
 
+/// Save or update user position
+pub async fn save_user_position(db_pool: &DatabasePool, position: &UserPosition) -> Result<()> {
+    let address_str = position.address.to_string();
+    
+    // Convert Uint values to strings for database storage
+    let total_collateral_str = position.total_collateral_base.to_string();
+    let total_debt_str = position.total_debt_base.to_string();
+    let available_borrows_str = position.available_borrows_base.to_string();
+    let threshold_str = position.current_liquidation_threshold.to_string();
+    let ltv_str = position.ltv.to_string();
+    let health_factor_str = position.health_factor.to_string();
+
+    match db_pool {
+        DatabasePool::Postgres(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO user_positions (
+                    address, total_collateral_base, total_debt_base, available_borrows_base,
+                    current_liquidation_threshold, ltv, health_factor, last_updated, is_at_risk
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (address) 
+                DO UPDATE SET
+                    total_collateral_base = EXCLUDED.total_collateral_base,
+                    total_debt_base = EXCLUDED.total_debt_base,
+                    available_borrows_base = EXCLUDED.available_borrows_base,
+                    current_liquidation_threshold = EXCLUDED.current_liquidation_threshold,
+                    ltv = EXCLUDED.ltv,
+                    health_factor = EXCLUDED.health_factor,
+                    last_updated = EXCLUDED.last_updated,
+                    is_at_risk = EXCLUDED.is_at_risk
+                "#,
+            )
+            .bind(&address_str)
+            .bind(&total_collateral_str)
+            .bind(&total_debt_str)
+            .bind(&available_borrows_str)
+            .bind(&threshold_str)
+            .bind(&ltv_str)
+            .bind(&health_factor_str)
+            .bind(&position.last_updated)
+            .bind(&position.is_at_risk)
+            .execute(pool)
+            .await?;
+        }
+        DatabasePool::Sqlite(pool) => {
+            sqlx::query(
+                r#"
+                INSERT OR REPLACE INTO user_positions (
+                    address, total_collateral_base, total_debt_base, available_borrows_base,
+                    current_liquidation_threshold, ltv, health_factor, last_updated, is_at_risk
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&address_str)
+            .bind(&total_collateral_str)
+            .bind(&total_debt_str)
+            .bind(&available_borrows_str)
+            .bind(&threshold_str)
+            .bind(&ltv_str)
+            .bind(&health_factor_str)
+            .bind(&position.last_updated)
+            .bind(&position.is_at_risk)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Get user position by address
+pub async fn get_user_position(db_pool: &DatabasePool, address: Address) -> Result<Option<UserPosition>> {
+    let address_str = address.to_string().to_lowercase();
+
+    match db_pool {
+        DatabasePool::Postgres(pool) => {
+            let row_opt = sqlx::query("SELECT * FROM user_positions WHERE LOWER(address) = $1")
+                .bind(&address_str)
+                .fetch_optional(pool)
+                .await?;
+                
+            if let Some(row) = row_opt {
+                let position = UserPosition {
+                    address,
+                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
+                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
+                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    ltv: row.get::<String, _>("ltv").parse()?,
+                    health_factor: row.get::<String, _>("health_factor").parse()?,
+                    last_updated: row.get("last_updated"),
+                    is_at_risk: row.get("is_at_risk"),
+                };
+                Ok(Some(position))
+            } else {
+                Ok(None)
+            }
+        }
+        DatabasePool::Sqlite(pool) => {
+            let row_opt = sqlx::query("SELECT * FROM user_positions WHERE LOWER(address) = ?")
+                .bind(&address_str)
+                .fetch_optional(pool)
+                .await?;
+                
+            if let Some(row) = row_opt {
+                let position = UserPosition {
+                    address,
+                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
+                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
+                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    ltv: row.get::<String, _>("ltv").parse()?,
+                    health_factor: row.get::<String, _>("health_factor").parse()?,
+                    last_updated: row.get("last_updated"),
+                    is_at_risk: row.get("is_at_risk"),
+                };
+                Ok(Some(position))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
+/// Get all user positions
+pub async fn get_all_users(db_pool: &DatabasePool) -> Result<Vec<UserPosition>> {
+    match db_pool {
+        DatabasePool::Postgres(pool) => {
+            let rows = sqlx::query("SELECT * FROM user_positions ORDER BY last_updated DESC")
+                .fetch_all(pool)
+                .await?;
+
+            let mut positions = Vec::new();
+            for row in rows {
+                let address = Address::parse_checksummed(row.get::<String, _>("address"), None)?;
+                let position = UserPosition {
+                    address,
+                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
+                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
+                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    ltv: row.get::<String, _>("ltv").parse()?,
+                    health_factor: row.get::<String, _>("health_factor").parse()?,
+                    last_updated: row.get("last_updated"),
+                    is_at_risk: row.get("is_at_risk"),
+                };
+                positions.push(position);
+            }
+            Ok(positions)
+        }
+        DatabasePool::Sqlite(pool) => {
+            let rows = sqlx::query("SELECT * FROM user_positions ORDER BY last_updated DESC")
+                .fetch_all(pool)
+                .await?;
+
+            let mut positions = Vec::new();
+            for row in rows {
+                let address = Address::parse_checksummed(row.get::<String, _>("address"), None)?;
+                let position = UserPosition {
+                    address,
+                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
+                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
+                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    ltv: row.get::<String, _>("ltv").parse()?,
+                    health_factor: row.get::<String, _>("health_factor").parse()?,
+                    last_updated: row.get("last_updated"),
+                    is_at_risk: row.get("is_at_risk"),
+                };
+                positions.push(position);
+            }
+            Ok(positions)
+        }
+    }
+}
+
+/// Get at-risk users (health factor < 1.05)
+pub async fn get_at_risk_users(db_pool: &DatabasePool) -> Result<Vec<UserPosition>> {
+    match db_pool {
+        DatabasePool::Postgres(pool) => {
+            let rows = sqlx::query("SELECT * FROM user_positions WHERE is_at_risk = true ORDER BY health_factor ASC")
+                .fetch_all(pool)
+                .await?;
+
+            let mut positions = Vec::new();
+            for row in rows {
+                let address = Address::parse_checksummed(row.get::<String, _>("address"), None)?;
+                let position = UserPosition {
+                    address,
+                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
+                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
+                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    ltv: row.get::<String, _>("ltv").parse()?,
+                    health_factor: row.get::<String, _>("health_factor").parse()?,
+                    last_updated: row.get("last_updated"),
+                    is_at_risk: row.get("is_at_risk"),
+                };
+                positions.push(position);
+            }
+            Ok(positions)
+        }
+        DatabasePool::Sqlite(pool) => {
+            let rows = sqlx::query("SELECT * FROM user_positions WHERE is_at_risk = 1 ORDER BY health_factor ASC")
+                .fetch_all(pool)
+                .await?;
+
+            let mut positions = Vec::new();
+            for row in rows {
+                let address = Address::parse_checksummed(row.get::<String, _>("address"), None)?;
+                let position = UserPosition {
+                    address,
+                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
+                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
+                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    ltv: row.get::<String, _>("ltv").parse()?,
+                    health_factor: row.get::<String, _>("health_factor").parse()?,
+                    last_updated: row.get("last_updated"),
+                    is_at_risk: row.get("is_at_risk"),
+                };
+                positions.push(position);
+            }
+            Ok(positions)
+        }
+    }
+}
+
+/// Get user position count
+pub async fn get_user_position_count(db_pool: &DatabasePool) -> Result<i64> {
+    let count = match db_pool {
+        DatabasePool::Postgres(pool) => {
+            let row = sqlx::query("SELECT COUNT(*) as count FROM user_positions")
+                .fetch_one(pool)
+                .await?;
+            row.get::<i64, _>("count")
+        }
+        DatabasePool::Sqlite(pool) => {
+            let row = sqlx::query("SELECT COUNT(*) as count FROM user_positions")
+                .fetch_one(pool)
+                .await?;
+            row.get::<i32, _>("count") as i64
+        }
+    };
+    Ok(count)
+}
+
+/// Record a liquidation event
+pub async fn record_liquidation_event(
+    db_pool: &DatabasePool,
+    user_address: &Address,
+    collateral_asset: &str,
+    debt_asset: &str,
+    debt_covered: &str,
+    collateral_received: &str,
+    profit: &str,
+    tx_hash: Option<&str>,
+    block_number: Option<i64>,
+) -> Result<()> {
+    let user_str = user_address.to_string();
+
+    match db_pool {
+        DatabasePool::Postgres(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO liquidation_events (
+                    user_address, collateral_asset, debt_asset, debt_covered,
+                    collateral_received, profit, tx_hash, block_number
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                "#,
+            )
+            .bind(&user_str)
+            .bind(collateral_asset)
+            .bind(debt_asset)
+            .bind(debt_covered)
+            .bind(collateral_received)
+            .bind(profit)
+            .bind(tx_hash)
+            .bind(block_number)
+            .execute(pool)
+            .await?;
+        }
+        DatabasePool::Sqlite(pool) => {
+            sqlx::query(
+                r#"
+                INSERT INTO liquidation_events (
+                    user_address, collateral_asset, debt_asset, debt_covered,
+                    collateral_received, profit, tx_hash, block_number, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                "#,
+            )
+            .bind(&user_str)
+            .bind(collateral_asset)
+            .bind(debt_asset)
+            .bind(debt_covered)
+            .bind(collateral_received)
+            .bind(profit)
+            .bind(tx_hash)
+            .bind(block_number)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Log monitoring events (simplified for now - just use tracing)
 pub async fn log_monitoring_event(
-    db_pool: &Pool<Sqlite>,
+    _db_pool: &DatabasePool,
     event_type: &str,
     user_address: Option<Address>,
-    details: Option<&str>,
+    message: Option<&str>,
 ) -> Result<()> {
-    sqlx::query(
-        r#"
-        INSERT INTO monitoring_events (event_type, user_address, timestamp, details)
-        VALUES (?, ?, datetime('now'), ?)
-        "#,
-    )
-    .bind(event_type)
-    .bind(user_address.map(|a| a.to_string()))
-    .bind(details)
-    .execute(db_pool)
-    .await?;
+    // For now, just log using tracing instead of database storage
+    match (user_address, message) {
+        (Some(addr), Some(msg)) => {
+            info!("📊 {} - User: {} - {}", event_type, addr, msg);
+        }
+        (Some(addr), None) => {
+            info!("📊 {} - User: {}", event_type, addr);
+        }
+        (None, Some(msg)) => {
+            info!("📊 {} - {}", event_type, msg);
+        }
+        (None, None) => {
+            info!("📊 {}", event_type);
+        }
+    }
     Ok(())
-}
-
-pub async fn get_at_risk_users(db_pool: &Pool<Sqlite>) -> Result<Vec<Address>> {
-    let rows = sqlx::query(
-        "SELECT address FROM user_positions 
-         WHERE is_at_risk = TRUE OR total_debt_base != '0' 
-         ORDER BY health_factor ASC 
-         LIMIT 100",
-    )
-    .fetch_all(db_pool)
-    .await?;
-
-    let mut users = Vec::new();
-    for row in rows {
-        let addr_str: String = row.get("address");
-        if let Ok(addr) = addr_str.parse() {
-            users.push(addr);
-        }
-    }
-    Ok(users)
-}
-
-pub async fn get_all_users(db_pool: &Pool<Sqlite>) -> Result<Vec<Address>> {
-    let rows = sqlx::query(
-        "SELECT address FROM user_positions 
-         ORDER BY last_updated DESC",
-    )
-    .fetch_all(db_pool)
-    .await?;
-
-    let mut users = Vec::new();
-    for row in rows {
-        let addr_str: String = row.get("address");
-        if let Ok(addr) = addr_str.parse() {
-            users.push(addr);
-        }
-    }
-    Ok(users)
 }

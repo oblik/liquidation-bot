@@ -3,7 +3,7 @@ use alloy_provider::Provider;
 use alloy_rpc_types::{BlockNumberOrTag, Filter};
 use alloy_sol_types::SolEvent;
 use eyre::Result;
-use sqlx::{Pool, Sqlite};
+use crate::database::DatabasePool;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -20,7 +20,7 @@ const MAX_USERS_TO_PROCESS: usize = 1000; // Limit initial discovery to prevent 
 pub async fn discover_initial_users<P>(
     provider: Arc<P>,
     pool_address: Address,
-    db_pool: &Pool<Sqlite>,
+    db_pool: &DatabasePool,
     event_tx: mpsc::UnboundedSender<BotEvent>,
 ) -> Result<HashSet<Address>>
 where

@@ -4,7 +4,7 @@ use alloy_provider::Provider;
 use dashmap::DashMap;
 use eyre::Result;
 use parking_lot::RwLock as SyncRwLock;
-use sqlx::{Pool, Sqlite};
+use crate::database::DatabasePool;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -375,7 +375,7 @@ where
 pub async fn update_user_position<P>(
     provider: Arc<P>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
-    db_pool: &Pool<Sqlite>,
+    db_pool: &DatabasePool,
     user_positions: Arc<DashMap<Address, UserPosition>>,
     processing_users: Arc<SyncRwLock<HashSet<Address>>>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
@@ -555,7 +555,7 @@ where
 pub async fn run_periodic_scan<P>(
     provider: Arc<P>,
     pool_address: Address,
-    db_pool: Pool<Sqlite>,
+    db_pool: DatabasePool,
     event_tx: mpsc::UnboundedSender<BotEvent>,
     config: BotConfig,
     _asset_configs: HashMap<Address, AssetConfig>,
@@ -593,7 +593,7 @@ where
                 sleep(Duration::from_millis(200)).await; // Brief pause every 10 users
             }
 
-            match check_user_health(&provider, pool_address, *user, 3).await {
+            match check_user_health(&provider, pool_address, user.address, 3).await {
                 Ok(position) => {
                     checked_users += 1;
 
@@ -613,7 +613,7 @@ where
                         }
 
                         // Send to liquidation opportunity channel
-                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(*user)) {
+                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
                             warn!("Failed to send liquidation opportunity: {}", e);
                         }
                     }
@@ -659,7 +659,7 @@ where
 }
 
 pub async fn start_status_reporter(
-    db_pool: Pool<Sqlite>,
+    db_pool: DatabasePool,
     user_positions: Arc<DashMap<Address, UserPosition>>,
 ) -> Result<()> {
     info!("Starting status reporter...");
