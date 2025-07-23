@@ -301,8 +301,8 @@ pub async fn get_user_position(db_pool: &DatabasePool, address: Address) -> Resu
     }
 }
 
-/// Get all user positions
-pub async fn get_all_users(db_pool: &DatabasePool) -> Result<Vec<UserPosition>> {
+/// Get all user positions (ordered by last_updated)
+pub async fn get_all_user_positions(db_pool: &DatabasePool) -> Result<Vec<UserPosition>> {
     match db_pool {
         DatabasePool::Postgres(pool) => {
             let rows = sqlx::query("SELECT * FROM user_positions ORDER BY last_updated DESC")
@@ -355,9 +355,26 @@ pub async fn get_all_users(db_pool: &DatabasePool) -> Result<Vec<UserPosition>> 
 
 /// Get at-risk users (health factor < 1.05)
 pub async fn get_at_risk_users(db_pool: &DatabasePool) -> Result<Vec<UserPosition>> {
+    get_at_risk_users_with_limit(db_pool, None).await
+}
+
+/// Get at-risk users with optional limit (health factor < 1.05)
+pub async fn get_at_risk_users_with_limit(
+    db_pool: &DatabasePool,
+    limit: Option<usize>,
+) -> Result<Vec<UserPosition>> {
     match db_pool {
         DatabasePool::Postgres(pool) => {
-            let rows = sqlx::query("SELECT * FROM user_positions WHERE is_at_risk = true ORDER BY health_factor ASC")
+            let query_str = if let Some(limit) = limit {
+                format!(
+                    "SELECT * FROM user_positions WHERE is_at_risk = true ORDER BY health_factor ASC LIMIT {}",
+                    limit
+                )
+            } else {
+                "SELECT * FROM user_positions WHERE is_at_risk = true ORDER BY health_factor ASC".to_string()
+            };
+            
+            let rows = sqlx::query(&query_str)
                 .fetch_all(pool)
                 .await?;
 
@@ -380,7 +397,16 @@ pub async fn get_at_risk_users(db_pool: &DatabasePool) -> Result<Vec<UserPositio
             Ok(positions)
         }
         DatabasePool::Sqlite(pool) => {
-            let rows = sqlx::query("SELECT * FROM user_positions WHERE is_at_risk = 1 ORDER BY health_factor ASC")
+            let query_str = if let Some(limit) = limit {
+                format!(
+                    "SELECT * FROM user_positions WHERE is_at_risk = 1 ORDER BY health_factor ASC LIMIT {}",
+                    limit
+                )
+            } else {
+                "SELECT * FROM user_positions WHERE is_at_risk = 1 ORDER BY health_factor ASC".to_string()
+            };
+            
+            let rows = sqlx::query(&query_str)
                 .fetch_all(pool)
                 .await?;
 
@@ -507,4 +533,56 @@ pub async fn log_monitoring_event(
         }
     }
     Ok(())
+}
+
+/// Get all users from the database for full rescan
+pub async fn get_all_users(db_pool: &DatabasePool) -> Result<Vec<UserPosition>> {
+    match db_pool {
+        DatabasePool::Postgres(pool) => {
+            let rows = sqlx::query("SELECT * FROM user_positions ORDER BY health_factor ASC")
+                .fetch_all(pool)
+                .await?;
+
+            let mut positions = Vec::new();
+            for row in rows {
+                let address = Address::parse_checksummed(row.get::<String, _>("address"), None)?;
+                let position = UserPosition {
+                    address,
+                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
+                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
+                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    ltv: row.get::<String, _>("ltv").parse()?,
+                    health_factor: row.get::<String, _>("health_factor").parse()?,
+                    last_updated: row.get("last_updated"),
+                    is_at_risk: row.get("is_at_risk"),
+                };
+                positions.push(position);
+            }
+            Ok(positions)
+        }
+        DatabasePool::Sqlite(pool) => {
+            let rows = sqlx::query("SELECT * FROM user_positions ORDER BY health_factor ASC")
+                .fetch_all(pool)
+                .await?;
+
+            let mut positions = Vec::new();
+            for row in rows {
+                let address = Address::parse_checksummed(row.get::<String, _>("address"), None)?;
+                let position = UserPosition {
+                    address,
+                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
+                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
+                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    ltv: row.get::<String, _>("ltv").parse()?,
+                    health_factor: row.get::<String, _>("health_factor").parse()?,
+                    last_updated: row.get("last_updated"),
+                    is_at_risk: row.get("is_at_risk"),
+                };
+                positions.push(position);
+            }
+            Ok(positions)
+        }
+    }
 }

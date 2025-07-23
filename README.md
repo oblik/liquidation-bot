@@ -210,6 +210,10 @@ PRIVATE_KEY=your_private_key_here         # Bot wallet private key
 LIQUIDATOR_CONTRACT=0x...                 # Your deployed contract
 MIN_PROFIT_THRESHOLD=10000000000000000    # Minimum profit in wei (0.01 ETH)
 HEALTH_FACTOR_THRESHOLD=1100000000000000000 # At-risk threshold (1.1)
+
+# Scanning (Optional)
+AT_RISK_SCAN_LIMIT=100                    # Max users to scan per cycle (default: unlimited)
+FULL_RESCAN_INTERVAL_MINUTES=60           # Full rescan every N minutes (default: 60)
 ```
 
 ## 🛡️ Security

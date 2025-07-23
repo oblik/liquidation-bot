@@ -78,6 +78,12 @@ HEALTH_FACTOR_THRESHOLD=1100000000000000000
 
 # Monitoring interval in seconds (default: 5)
 MONITORING_INTERVAL_SECS=5
+
+# At-risk scan limit - max users to check per regular scan cycle (default: unlimited)
+AT_RISK_SCAN_LIMIT=100
+
+# Full rescan interval - how often to scan ALL users in minutes (default: 60)
+FULL_RESCAN_INTERVAL_MINUTES=60
 ```
 
 **Parameter Explanations:**
@@ -85,6 +91,8 @@ MONITORING_INTERVAL_SECS=5
 - `GAS_PRICE_MULTIPLIER`: Multiplier for competitive gas pricing (1 = market rate)
 - `HEALTH_FACTOR_THRESHOLD`: Health factor below which users are flagged as "at risk"
 - `MONITORING_INTERVAL_SECS`: How often to perform periodic health checks
+- `AT_RISK_SCAN_LIMIT`: Limits regular scans to N most at-risk users (ordered by health factor)
+- `FULL_RESCAN_INTERVAL_MINUTES`: Ensures complete coverage by scanning all users periodically
 
 ### Logging Configuration
 
