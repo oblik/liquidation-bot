@@ -634,17 +634,16 @@ pub async fn get_users_eligible_for_archival(
 
     match db_pool {
         DatabasePool::Postgres(pool) => {
-            // Use CAST to NUMERIC for proper numeric comparison in PostgreSQL
+            // For PostgreSQL, we'll do the comparison in Rust to avoid precision issues with very large U256 numbers
+            // First get all users with zero debt and within cooldown period
             let rows = sqlx::query(
                 r#"
                 SELECT * FROM user_positions 
                 WHERE total_debt_base = '0' 
-                  AND CAST(health_factor AS NUMERIC) >= CAST($1 AS NUMERIC)
-                  AND last_updated <= $2
+                  AND last_updated <= $1
                 ORDER BY last_updated ASC
                 "#,
             )
-            .bind(&health_factor_str)
             .bind(&cooldown_timestamp)
             .fetch_all(pool)
             .await?;
@@ -652,22 +651,31 @@ pub async fn get_users_eligible_for_archival(
             let mut positions = Vec::new();
             for row in rows {
                 let address = Address::parse_checksummed(row.get::<String, _>("address"), None)?;
-                let position = UserPosition {
-                    address,
-                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
-                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row
-                        .get::<String, _>("available_borrows_base")
-                        .parse()?,
-                    current_liquidation_threshold: row
-                        .get::<String, _>("current_liquidation_threshold")
-                        .parse()?,
-                    ltv: row.get::<String, _>("ltv").parse()?,
-                    health_factor: row.get::<String, _>("health_factor").parse()?,
-                    last_updated: row.get("last_updated"),
-                    is_at_risk: row.get("is_at_risk"),
-                };
-                positions.push(position);
+                let health_factor_str = row.get::<String, _>("health_factor");
+
+                // Parse health factor and compare in Rust to avoid database precision issues
+                if let Ok(health_factor) = health_factor_str.parse::<alloy_primitives::U256>() {
+                    if health_factor >= safe_health_factor_threshold {
+                        let position = UserPosition {
+                            address,
+                            total_collateral_base: row
+                                .get::<String, _>("total_collateral_base")
+                                .parse()?,
+                            total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                            available_borrows_base: row
+                                .get::<String, _>("available_borrows_base")
+                                .parse()?,
+                            current_liquidation_threshold: row
+                                .get::<String, _>("current_liquidation_threshold")
+                                .parse()?,
+                            ltv: row.get::<String, _>("ltv").parse()?,
+                            health_factor,
+                            last_updated: row.get("last_updated"),
+                            is_at_risk: row.get("is_at_risk"),
+                        };
+                        positions.push(position);
+                    }
+                }
             }
             Ok(positions)
         }
