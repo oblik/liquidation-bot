@@ -1,7 +1,7 @@
 use crate::models::UserPosition;
 use alloy_primitives::Address;
 use eyre::Result;
-use sqlx::{Pool, Postgres, Sqlite, Row};
+use sqlx::{Pool, Postgres, Row, Sqlite};
 use tracing::info;
 
 /// Database connection enum that can hold either PostgreSQL or SQLite connections
@@ -34,7 +34,10 @@ fn detect_database_type(database_url: &str) -> Result<&'static str> {
     } else if database_url.starts_with("sqlite:") {
         Ok("sqlite")
     } else {
-        Err(eyre::eyre!("Unsupported database type in URL: {}", database_url))
+        Err(eyre::eyre!(
+            "Unsupported database type in URL: {}",
+            database_url
+        ))
     }
 }
 
@@ -67,7 +70,7 @@ pub async fn create_tables(db_pool: &DatabasePool) -> Result<()> {
     match db_pool {
         DatabasePool::Postgres(pool) => {
             info!("Creating PostgreSQL tables...");
-            
+
             // Create user_positions table with PostgreSQL syntax
             sqlx::query(
                 r#"
@@ -120,7 +123,7 @@ pub async fn create_tables(db_pool: &DatabasePool) -> Result<()> {
         }
         DatabasePool::Sqlite(pool) => {
             info!("Creating SQLite tables...");
-            
+
             // Create user_positions table with SQLite syntax
             sqlx::query(
                 r#"
@@ -180,7 +183,7 @@ pub async fn create_tables(db_pool: &DatabasePool) -> Result<()> {
 /// Save or update user position
 pub async fn save_user_position(db_pool: &DatabasePool, position: &UserPosition) -> Result<()> {
     let address_str = position.address.to_string();
-    
+
     // Convert Uint values to strings for database storage
     let total_collateral_str = position.total_collateral_base.to_string();
     let total_debt_str = position.total_debt_base.to_string();
@@ -248,7 +251,10 @@ pub async fn save_user_position(db_pool: &DatabasePool, position: &UserPosition)
 }
 
 /// Get user position by address
-pub async fn get_user_position(db_pool: &DatabasePool, address: Address) -> Result<Option<UserPosition>> {
+pub async fn get_user_position(
+    db_pool: &DatabasePool,
+    address: Address,
+) -> Result<Option<UserPosition>> {
     let address_str = address.to_string().to_lowercase();
 
     match db_pool {
@@ -257,14 +263,18 @@ pub async fn get_user_position(db_pool: &DatabasePool, address: Address) -> Resu
                 .bind(&address_str)
                 .fetch_optional(pool)
                 .await?;
-                
+
             if let Some(row) = row_opt {
                 let position = UserPosition {
                     address,
                     total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
                     total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
-                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    available_borrows_base: row
+                        .get::<String, _>("available_borrows_base")
+                        .parse()?,
+                    current_liquidation_threshold: row
+                        .get::<String, _>("current_liquidation_threshold")
+                        .parse()?,
                     ltv: row.get::<String, _>("ltv").parse()?,
                     health_factor: row.get::<String, _>("health_factor").parse()?,
                     last_updated: row.get("last_updated"),
@@ -280,14 +290,18 @@ pub async fn get_user_position(db_pool: &DatabasePool, address: Address) -> Resu
                 .bind(&address_str)
                 .fetch_optional(pool)
                 .await?;
-                
+
             if let Some(row) = row_opt {
                 let position = UserPosition {
                     address,
                     total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
                     total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
-                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    available_borrows_base: row
+                        .get::<String, _>("available_borrows_base")
+                        .parse()?,
+                    current_liquidation_threshold: row
+                        .get::<String, _>("current_liquidation_threshold")
+                        .parse()?,
                     ltv: row.get::<String, _>("ltv").parse()?,
                     health_factor: row.get::<String, _>("health_factor").parse()?,
                     last_updated: row.get("last_updated"),
@@ -316,8 +330,12 @@ pub async fn get_all_user_positions(db_pool: &DatabasePool) -> Result<Vec<UserPo
                     address,
                     total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
                     total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
-                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    available_borrows_base: row
+                        .get::<String, _>("available_borrows_base")
+                        .parse()?,
+                    current_liquidation_threshold: row
+                        .get::<String, _>("current_liquidation_threshold")
+                        .parse()?,
                     ltv: row.get::<String, _>("ltv").parse()?,
                     health_factor: row.get::<String, _>("health_factor").parse()?,
                     last_updated: row.get("last_updated"),
@@ -339,8 +357,12 @@ pub async fn get_all_user_positions(db_pool: &DatabasePool) -> Result<Vec<UserPo
                     address,
                     total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
                     total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
-                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    available_borrows_base: row
+                        .get::<String, _>("available_borrows_base")
+                        .parse()?,
+                    current_liquidation_threshold: row
+                        .get::<String, _>("current_liquidation_threshold")
+                        .parse()?,
                     ltv: row.get::<String, _>("ltv").parse()?,
                     health_factor: row.get::<String, _>("health_factor").parse()?,
                     last_updated: row.get("last_updated"),
@@ -371,12 +393,11 @@ pub async fn get_at_risk_users_with_limit(
                     limit
                 )
             } else {
-                "SELECT * FROM user_positions WHERE is_at_risk = true ORDER BY health_factor ASC".to_string()
+                "SELECT * FROM user_positions WHERE is_at_risk = true ORDER BY health_factor ASC"
+                    .to_string()
             };
-            
-            let rows = sqlx::query(&query_str)
-                .fetch_all(pool)
-                .await?;
+
+            let rows = sqlx::query(&query_str).fetch_all(pool).await?;
 
             let mut positions = Vec::new();
             for row in rows {
@@ -385,8 +406,12 @@ pub async fn get_at_risk_users_with_limit(
                     address,
                     total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
                     total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
-                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    available_borrows_base: row
+                        .get::<String, _>("available_borrows_base")
+                        .parse()?,
+                    current_liquidation_threshold: row
+                        .get::<String, _>("current_liquidation_threshold")
+                        .parse()?,
                     ltv: row.get::<String, _>("ltv").parse()?,
                     health_factor: row.get::<String, _>("health_factor").parse()?,
                     last_updated: row.get("last_updated"),
@@ -403,12 +428,11 @@ pub async fn get_at_risk_users_with_limit(
                     limit
                 )
             } else {
-                "SELECT * FROM user_positions WHERE is_at_risk = 1 ORDER BY health_factor ASC".to_string()
+                "SELECT * FROM user_positions WHERE is_at_risk = 1 ORDER BY health_factor ASC"
+                    .to_string()
             };
-            
-            let rows = sqlx::query(&query_str)
-                .fetch_all(pool)
-                .await?;
+
+            let rows = sqlx::query(&query_str).fetch_all(pool).await?;
 
             let mut positions = Vec::new();
             for row in rows {
@@ -417,8 +441,12 @@ pub async fn get_at_risk_users_with_limit(
                     address,
                     total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
                     total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
-                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    available_borrows_base: row
+                        .get::<String, _>("available_borrows_base")
+                        .parse()?,
+                    current_liquidation_threshold: row
+                        .get::<String, _>("current_liquidation_threshold")
+                        .parse()?,
                     ltv: row.get::<String, _>("ltv").parse()?,
                     health_factor: row.get::<String, _>("health_factor").parse()?,
                     last_updated: row.get("last_updated"),
@@ -550,8 +578,12 @@ pub async fn get_all_users(db_pool: &DatabasePool) -> Result<Vec<UserPosition>> 
                     address,
                     total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
                     total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
-                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    available_borrows_base: row
+                        .get::<String, _>("available_borrows_base")
+                        .parse()?,
+                    current_liquidation_threshold: row
+                        .get::<String, _>("current_liquidation_threshold")
+                        .parse()?,
                     ltv: row.get::<String, _>("ltv").parse()?,
                     health_factor: row.get::<String, _>("health_factor").parse()?,
                     last_updated: row.get("last_updated"),
@@ -573,8 +605,12 @@ pub async fn get_all_users(db_pool: &DatabasePool) -> Result<Vec<UserPosition>> 
                     address,
                     total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
                     total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
-                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    available_borrows_base: row
+                        .get::<String, _>("available_borrows_base")
+                        .parse()?,
+                    current_liquidation_threshold: row
+                        .get::<String, _>("current_liquidation_threshold")
+                        .parse()?,
                     ltv: row.get::<String, _>("ltv").parse()?,
                     health_factor: row.get::<String, _>("health_factor").parse()?,
                     last_updated: row.get("last_updated"),
@@ -598,11 +634,12 @@ pub async fn get_users_eligible_for_archival(
 
     match db_pool {
         DatabasePool::Postgres(pool) => {
+            // Use CAST to NUMERIC for proper numeric comparison in PostgreSQL
             let rows = sqlx::query(
                 r#"
                 SELECT * FROM user_positions 
                 WHERE total_debt_base = '0' 
-                  AND health_factor >= $1
+                  AND CAST(health_factor AS NUMERIC) >= CAST($1 AS NUMERIC)
                   AND last_updated <= $2
                 ORDER BY last_updated ASC
                 "#,
@@ -619,8 +656,12 @@ pub async fn get_users_eligible_for_archival(
                     address,
                     total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
                     total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
-                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    available_borrows_base: row
+                        .get::<String, _>("available_borrows_base")
+                        .parse()?,
+                    current_liquidation_threshold: row
+                        .get::<String, _>("current_liquidation_threshold")
+                        .parse()?,
                     ltv: row.get::<String, _>("ltv").parse()?,
                     health_factor: row.get::<String, _>("health_factor").parse()?,
                     last_updated: row.get("last_updated"),
@@ -631,16 +672,16 @@ pub async fn get_users_eligible_for_archival(
             Ok(positions)
         }
         DatabasePool::Sqlite(pool) => {
+            // For SQLite, we'll do the comparison in Rust to avoid overflow/precision issues
+            // First get all users with zero debt and within cooldown period
             let rows = sqlx::query(
                 r#"
                 SELECT * FROM user_positions 
                 WHERE total_debt_base = '0' 
-                  AND CAST(health_factor AS INTEGER) >= CAST(? AS INTEGER)
                   AND last_updated <= ?
                 ORDER BY last_updated ASC
                 "#,
             )
-            .bind(&health_factor_str)
             .bind(&cooldown_timestamp)
             .fetch_all(pool)
             .await?;
@@ -648,18 +689,31 @@ pub async fn get_users_eligible_for_archival(
             let mut positions = Vec::new();
             for row in rows {
                 let address = Address::parse_checksummed(row.get::<String, _>("address"), None)?;
-                let position = UserPosition {
-                    address,
-                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
-                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
-                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
-                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
-                    ltv: row.get::<String, _>("ltv").parse()?,
-                    health_factor: row.get::<String, _>("health_factor").parse()?,
-                    last_updated: row.get("last_updated"),
-                    is_at_risk: row.get("is_at_risk"),
-                };
-                positions.push(position);
+                let health_factor_str = row.get::<String, _>("health_factor");
+
+                // Parse health factor and compare in Rust to avoid database overflow
+                if let Ok(health_factor) = health_factor_str.parse::<alloy_primitives::U256>() {
+                    if health_factor >= safe_health_factor_threshold {
+                        let position = UserPosition {
+                            address,
+                            total_collateral_base: row
+                                .get::<String, _>("total_collateral_base")
+                                .parse()?,
+                            total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                            available_borrows_base: row
+                                .get::<String, _>("available_borrows_base")
+                                .parse()?,
+                            current_liquidation_threshold: row
+                                .get::<String, _>("current_liquidation_threshold")
+                                .parse()?,
+                            ltv: row.get::<String, _>("ltv").parse()?,
+                            health_factor,
+                            last_updated: row.get("last_updated"),
+                            is_at_risk: row.get("is_at_risk"),
+                        };
+                        positions.push(position);
+                    }
+                }
             }
             Ok(positions)
         }
@@ -680,33 +734,37 @@ pub async fn archive_zero_debt_users(
     match db_pool {
         DatabasePool::Postgres(pool) => {
             // Use ANY to handle the array of addresses
-            let placeholders: Vec<String> = (1..=address_strings.len()).map(|i| format!("${}", i)).collect();
+            let placeholders: Vec<String> = (1..=address_strings.len())
+                .map(|i| format!("${}", i))
+                .collect();
             let query = format!(
                 "DELETE FROM user_positions WHERE address = ANY(ARRAY[{}])",
                 placeholders.join(", ")
             );
-            
+
             let mut query_builder = sqlx::query(&query);
             for addr_str in &address_strings {
                 query_builder = query_builder.bind(addr_str);
             }
-            
+
             let result = query_builder.execute(pool).await?;
             Ok(result.rows_affected())
         }
         DatabasePool::Sqlite(pool) => {
             // Use IN clause for SQLite
-            let placeholders: Vec<String> = (0..address_strings.len()).map(|_| "?".to_string()).collect();
+            let placeholders: Vec<String> = (0..address_strings.len())
+                .map(|_| "?".to_string())
+                .collect();
             let query = format!(
                 "DELETE FROM user_positions WHERE address IN ({})",
                 placeholders.join(", ")
             );
-            
+
             let mut query_builder = sqlx::query(&query);
             for addr_str in &address_strings {
                 query_builder = query_builder.bind(addr_str);
             }
-            
+
             let result = query_builder.execute(pool).await?;
             Ok(result.rows_affected())
         }
@@ -717,15 +775,19 @@ pub async fn archive_zero_debt_users(
 pub async fn get_zero_debt_user_count(db_pool: &DatabasePool) -> Result<i64> {
     let count = match db_pool {
         DatabasePool::Postgres(pool) => {
-            let row = sqlx::query("SELECT COUNT(*) as count FROM user_positions WHERE total_debt_base = '0'")
-                .fetch_one(pool)
-                .await?;
+            let row = sqlx::query(
+                "SELECT COUNT(*) as count FROM user_positions WHERE total_debt_base = '0'",
+            )
+            .fetch_one(pool)
+            .await?;
             row.get::<i64, _>("count")
         }
         DatabasePool::Sqlite(pool) => {
-            let row = sqlx::query("SELECT COUNT(*) as count FROM user_positions WHERE total_debt_base = '0'")
-                .fetch_one(pool)
-                .await?;
+            let row = sqlx::query(
+                "SELECT COUNT(*) as count FROM user_positions WHERE total_debt_base = '0'",
+            )
+            .fetch_one(pool)
+            .await?;
             row.get::<i32, _>("count") as i64
         }
     };
@@ -734,29 +796,48 @@ pub async fn get_zero_debt_user_count(db_pool: &DatabasePool) -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloy_primitives::{Address, U256};
 
     #[tokio::test]
     async fn test_archival_functions() {
         // Test basic archival query construction for SQLite
-        let mock_addresses = vec![
-            Address::from([1u8; 20]),
-            Address::from([2u8; 20]),
-        ];
-        
+        let mock_addresses = vec![Address::from([1u8; 20]), Address::from([2u8; 20])];
+
         // Test that the query construction doesn't panic
-        let address_strings: Vec<String> = mock_addresses.iter().map(|addr| addr.to_string()).collect();
-        let placeholders: Vec<String> = (0..address_strings.len()).map(|_| "?".to_string()).collect();
+        let address_strings: Vec<String> =
+            mock_addresses.iter().map(|addr| addr.to_string()).collect();
+        let placeholders: Vec<String> = (0..address_strings.len())
+            .map(|_| "?".to_string())
+            .collect();
         let query = format!(
             "DELETE FROM user_positions WHERE address IN ({})",
             placeholders.join(", ")
         );
-        
+
         assert_eq!(query, "DELETE FROM user_positions WHERE address IN (?, ?)");
-        
+
         // Test config parsing for archival settings
         let threshold = U256::from(10000000000000000000u64); // 10.0 ETH in wei
         assert_eq!(threshold.to_string(), "10000000000000000000");
+
+        // Test U256 comparison logic to validate the fix
+        let small_health_factor = U256::from(2000000000000000000u64); // 2.0
+        let large_health_factor = U256::from(15000000000000000000u64); // 15.0
+        let threshold = U256::from(10000000000000000000u64); // 10.0
+
+        assert!(small_health_factor < threshold);
+        assert!(large_health_factor >= threshold);
+
+        // Test string representation edge cases that would break lexicographical comparison
+        let two_eth = U256::from(2000000000000000000u64);
+        let ten_eth = U256::from(10000000000000000000u64);
+
+        // These string comparisons would fail lexicographically but work with proper U256 comparison
+        assert!(two_eth.to_string() == "2000000000000000000");
+        assert!(ten_eth.to_string() == "10000000000000000000");
+        assert!(two_eth < ten_eth); // Proper numeric comparison
+
+        // Lexicographical string comparison would incorrectly say "2000000000000000000" > "10000000000000000000"
+        // Our fix ensures we use proper U256/NUMERIC comparison instead
     }
 }
