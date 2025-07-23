@@ -1,10 +1,10 @@
+use crate::database::DatabasePool;
 use alloy_contract::ContractInstance;
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use dashmap::DashMap;
 use eyre::Result;
 use parking_lot::RwLock as SyncRwLock;
-use crate::database::DatabasePool;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -559,28 +559,38 @@ pub async fn run_periodic_scan<P>(
     event_tx: mpsc::UnboundedSender<BotEvent>,
     config: BotConfig,
     _asset_configs: HashMap<Address, AssetConfig>,
+    user_positions: Arc<DashMap<Address, UserPosition>>, // Add user_positions parameter
 ) -> Result<()>
 where
     P: Provider,
 {
     info!("Starting periodic position scan...");
-    
+
     // Log configuration
     match config.at_risk_scan_limit {
-        Some(limit) => info!("🔧 At-risk scan limit configured: {} users per cycle", limit),
+        Some(limit) => info!(
+            "🔧 At-risk scan limit configured: {} users per cycle",
+            limit
+        ),
         None => info!("🔧 At-risk scan limit: unlimited"),
     }
-    info!("🔧 Full rescan interval: {} minutes", config.full_rescan_interval_minutes);
+    info!(
+        "🔧 Full rescan interval: {} minutes",
+        config.full_rescan_interval_minutes
+    );
 
     let mut interval = tokio::time::interval(
         tokio::time::Duration::from_secs(config.monitoring_interval_secs * 6), // Slower than event-driven updates
     );
-    
+
     let mut full_rescan_interval = tokio::time::interval(
         tokio::time::Duration::from_secs(config.full_rescan_interval_minutes * 60), // Full rescan interval
     );
-    
-    let mut last_full_rescan = std::time::Instant::now();
+
+    // Separate archival interval to avoid timestamp conflicts
+    let mut archival_interval = tokio::time::interval(
+        tokio::time::Duration::from_secs((config.zero_debt_cooldown_hours * 60 * 60) / 4), // Check 4x per cooldown period
+    );
 
     loop {
         tokio::select! {
@@ -653,7 +663,7 @@ where
             _ = full_rescan_interval.tick() => {
                 // Full rescan: check all users to ensure complete coverage
                 info!("🔍 Starting full rescan: checking all users to ensure complete coverage");
-                
+
                 let all_users = match crate::database::get_all_users(&db_pool).await {
                     Ok(users) => users,
                     Err(e) => {
@@ -663,7 +673,7 @@ where
                 };
 
                 info!("🔍 Full rescan: {} total users to check", all_users.len());
-                
+
                 let mut checked_users = 0;
                 let mut at_risk_users_count = 0;
                 let mut new_at_risk_found = 0;
@@ -686,7 +696,7 @@ where
 
                             if position.is_at_risk {
                                 at_risk_users_count += 1;
-                                
+
                                 // Check if this user was not previously at-risk
                                 if !user.is_at_risk {
                                     new_at_risk_found += 1;
@@ -695,7 +705,7 @@ where
                                         user.address,
                                         format_health_factor(position.health_factor)
                                     );
-                                    
+
                                     // Send to liquidation opportunity channel
                                     if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
                                         warn!("Failed to send liquidation opportunity: {}", e);
@@ -713,8 +723,6 @@ where
                     }
                 }
 
-                last_full_rescan = std::time::Instant::now();
-                
                 info!(
                     "✅ Full rescan complete: {}/{} users checked, {} at-risk found, {} new at-risk discovered",
                     checked_users, all_users.len(), at_risk_users_count, new_at_risk_found
@@ -733,11 +741,12 @@ where
                 {
                     error!("Failed to log full rescan completion: {}", e);
                 }
-
-                // Perform user archival if enabled
+            }
+            _ = archival_interval.tick() => {
+                // Separate archival process - runs independently from full rescan
                 if config.archive_zero_debt_users {
                     info!("🗄️ Starting user archival process...");
-                    
+
                     match crate::database::get_users_eligible_for_archival(
                         &db_pool,
                         config.zero_debt_cooldown_hours,
@@ -752,7 +761,7 @@ where
                                 );
 
                                 let user_addresses: Vec<Address> = eligible_users.iter().map(|u| u.address).collect();
-                                
+
                                 match crate::database::archive_zero_debt_users(&db_pool, &user_addresses).await {
                                     Ok(archived_count) => {
                                         info!(
@@ -760,12 +769,26 @@ where
                                             archived_count
                                         );
 
+                                        // Remove archived users from in-memory DashMap to prevent memory bloat
+                                        let mut removed_from_memory = 0;
+                                        for &user_address in &user_addresses {
+                                            if user_positions.remove(&user_address).is_some() {
+                                                removed_from_memory += 1;
+                                                debug!("🗑️ Removed archived user {:?} from memory", user_address);
+                                            }
+                                        }
+
+                                        info!(
+                                            "🧠 Cleaned up {} archived users from memory (expected: {})",
+                                            removed_from_memory, archived_count
+                                        );
+
                                         // Log archival event
                                         if let Err(e) = crate::database::log_monitoring_event(
                                             &db_pool,
                                             "users_archived",
                                             None,
-                                            Some(&format!("archived {} zero-debt users", archived_count)),
+                                            Some(&format!("archived {} zero-debt users, cleaned {} from memory", archived_count, removed_from_memory)),
                                         ).await {
                                             error!("Failed to log archival event: {}", e);
                                         }
@@ -782,6 +805,9 @@ where
                             error!("Failed to get users eligible for archival: {}", e);
                         }
                     }
+                } else {
+                    // Archival is disabled, just tick the interval
+                    debug!("🗄️ User archival is disabled in configuration");
                 }
             }
         }
