@@ -466,7 +466,46 @@ pub fn get_borrowable_assets(
         .collect()
 }
 
+/// Get all viable liquidation pairs for a user's position
+/// Returns pairs as (collateral_asset, debt_asset) that can be liquidated
+pub fn get_all_viable_liquidation_pairs(
+    assets: &HashMap<Address, LiquidationAssetConfig>,
+    user_collateral_assets: &[Address],
+    user_debt_assets: &[Address],
+) -> Vec<(Address, Address)> {
+    if user_collateral_assets.is_empty() || user_debt_assets.is_empty() {
+        return Vec::new();
+    }
+
+    let mut viable_pairs = Vec::new();
+
+    // Evaluate all possible collateral/debt combinations
+    for &collateral_addr in user_collateral_assets {
+        for &debt_addr in user_debt_assets {
+            // Skip if assets not configured
+            let collateral_config = match assets.get(&collateral_addr) {
+                Some(config) => config,
+                None => continue,
+            };
+            let debt_config = match assets.get(&debt_addr) {
+                Some(config) => config,
+                None => continue,
+            };
+
+            // Skip if collateral can't be used as collateral or debt can't be borrowed
+            if !collateral_config.is_collateral || !debt_config.is_borrowable {
+                continue;
+            }
+
+            viable_pairs.push((collateral_addr, debt_addr));
+        }
+    }
+
+    viable_pairs
+}
+
 /// Find best liquidation pair for a user's position based on profitability analysis
+/// DEPRECATED: Use get_all_viable_liquidation_pairs and actual profit simulation instead
 pub fn find_best_liquidation_pair(
     assets: &HashMap<Address, LiquidationAssetConfig>,
     user_collateral_assets: &[Address],
@@ -784,6 +823,37 @@ mod tests {
 
         // High bonus should result in higher score
         assert!(high_score > low_score);
+    }
+
+    #[test]
+    fn test_get_all_viable_liquidation_pairs() {
+        let assets = create_test_assets();
+
+        let weth_addr = Address::from_str("0x4200000000000000000000000000000000000006").unwrap();
+        let usdc_addr = Address::from_str("0x036CbD53842c5426634e7929541eC2318f3dCF7e").unwrap();
+        let cbeth_addr = Address::from_str("0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22").unwrap();
+
+        // Test with multiple collateral and debt assets
+        let user_collateral = vec![weth_addr, cbeth_addr];
+        let user_debt = vec![usdc_addr];
+
+        let viable_pairs = get_all_viable_liquidation_pairs(&assets, &user_collateral, &user_debt);
+
+        // Should return all valid combinations
+        assert_eq!(viable_pairs.len(), 2); // WETH->USDC and cbETH->USDC
+        
+        // Verify correct pairs are included
+        assert!(viable_pairs.contains(&(weth_addr, usdc_addr)));
+        assert!(viable_pairs.contains(&(cbeth_addr, usdc_addr)));
+
+        // Test with empty inputs
+        let empty_pairs = get_all_viable_liquidation_pairs(&assets, &[], &user_debt);
+        assert!(empty_pairs.is_empty());
+
+        let empty_pairs2 = get_all_viable_liquidation_pairs(&assets, &user_collateral, &[]);
+        assert!(empty_pairs2.is_empty());
+
+        println!("✅ All viable pair tests passed");
     }
 
     /// Test demonstrating the fix for the dynamic asset ID issue

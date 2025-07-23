@@ -43,6 +43,57 @@ fn create_gas_estimate(gas_price_gwei: u64) -> GasEstimate {
     }
 }
 
+fn simulate_liquidation_with_custom_slippage(
+    user_position: &UserPosition,
+    collateral_asset: &LiquidationAssetConfig,
+    debt_asset: &LiquidationAssetConfig,
+    gas_estimate: &GasEstimate,
+    min_profit_threshold: U256,
+    slippage_bps: u64, // Custom slippage in basis points
+) -> LiquidationOpportunity {
+    // Calculate maximum liquidation amount (50% of debt)
+    let max_debt_to_cover = user_position.total_debt_base * U256::from(5000) / U256::from(10000);
+
+    // Calculate expected collateral received with liquidation bonus
+    let bonus_multiplier = U256::from(10000 + collateral_asset.liquidation_bonus);
+    let expected_collateral = max_debt_to_cover * bonus_multiplier / U256::from(10000);
+    let liquidation_bonus = expected_collateral - max_debt_to_cover;
+
+    // Calculate flash loan fee (0.05%)
+    let flash_loan_fee = max_debt_to_cover * U256::from(5) / U256::from(10000);
+
+    // Custom swap slippage
+    let swap_slippage = if collateral_asset.address != debt_asset.address {
+        expected_collateral * U256::from(slippage_bps) / U256::from(10000)
+    } else {
+        U256::ZERO
+    };
+
+    // Calculate net profit
+    let total_costs = flash_loan_fee + gas_estimate.total_cost + swap_slippage;
+    let estimated_profit = if liquidation_bonus > total_costs {
+        liquidation_bonus - total_costs
+    } else {
+        U256::ZERO
+    };
+
+    let profit_threshold_met = estimated_profit >= min_profit_threshold;
+
+    LiquidationOpportunity {
+        user: user_position.address,
+        collateral_asset: collateral_asset.address,
+        debt_asset: debt_asset.address,
+        debt_to_cover: max_debt_to_cover,
+        expected_collateral_received: expected_collateral,
+        liquidation_bonus,
+        flash_loan_fee,
+        gas_cost: gas_estimate.total_cost,
+        swap_slippage,
+        estimated_profit,
+        profit_threshold_met,
+    }
+}
+
 fn simulate_liquidation(
     user_position: &UserPosition,
     collateral_asset: &LiquidationAssetConfig,
@@ -96,6 +147,84 @@ fn simulate_liquidation(
 fn main() -> eyre::Result<()> {
     println!("🧪 Liquidation Bot - Profitability Testing");
     println!("==========================================\n");
+
+    // NEW: Test scenario demonstrating heuristic vs profit-based selection
+    println!("📊 SCENARIO 0: Heuristic vs Profit-Based Selection");
+    println!("=================================================");
+    
+    let test_position = UserPosition {
+        address: Address::from_str("0x742d35Cc6635C0532925a3b8D0fDfB4C8f9f3BF4")?,
+        total_collateral_base: U256::from_str("100000000000000000000")?, // 100 ETH collateral
+        total_debt_base: U256::from_str("80000000000000000000")?,       // 80 ETH debt
+        available_borrows_base: U256::ZERO,
+        current_liquidation_threshold: U256::from(8000), // 80%
+        ltv: U256::from(7500),                           // 75%
+        health_factor: U256::from(950_000_000_000_000_000u64), // 0.95 (below 1.0)
+        last_updated: Utc::now(),
+        is_at_risk: true,
+    };
+
+    // Asset 1: High liquidation bonus but high slippage cost (e.g., illiquid token)
+    let high_bonus_asset = LiquidationAssetConfig {
+        address: Address::from_str("0x1111111111111111111111111111111111111111")?,
+        symbol: "HIGHBONUS".to_string(),
+        decimals: 18,
+        asset_id: 0,
+        liquidation_bonus: 1000, // 10% bonus - very high!
+        is_collateral: true,
+        is_borrowable: false,
+    };
+
+    // Asset 2: Lower liquidation bonus but very liquid (e.g., WETH)
+    let weth = create_weth_config(); // 5% bonus, very liquid
+    let usdc = create_usdc_config();
+    let gas_estimate = create_gas_estimate(15); // 15 gwei
+    let min_profit = U256::from_str("1000000000000000")?; // 0.001 ETH minimum
+
+    // Simulate high bonus asset (old heuristic would pick this)
+    let high_bonus_opportunity = simulate_liquidation_with_custom_slippage(
+        &test_position, 
+        &high_bonus_asset, 
+        &usdc, 
+        &gas_estimate, 
+        min_profit, 
+        500 // 5% slippage due to illiquidity
+    );
+
+    // Simulate WETH (profit-based approach might pick this)
+    let weth_opportunity = simulate_liquidation_with_custom_slippage(
+        &test_position, 
+        &weth, 
+        &usdc, 
+        &gas_estimate, 
+        min_profit, 
+        50  // 0.5% slippage - very liquid
+    );
+
+    println!("🔍 Comparison Results:");
+    println!("─────────────────────");
+    println!("High Bonus Asset ({}%):", high_bonus_asset.liquidation_bonus / 100);
+    println!("  💰 Liquidation Bonus: {} ETH", high_bonus_opportunity.liquidation_bonus / U256::from(10u64.pow(18)));
+    println!("  📉 Slippage Cost: {} ETH", high_bonus_opportunity.swap_slippage / U256::from(10u64.pow(18)));
+    println!("  💵 NET PROFIT: {} ETH", high_bonus_opportunity.estimated_profit / U256::from(10u64.pow(18)));
+    println!("  ✅ Heuristic Choice: YES (highest bonus)");
+    println!();
+    
+    println!("WETH ({}%):", weth.liquidation_bonus / 100);
+    println!("  💰 Liquidation Bonus: {} ETH", weth_opportunity.liquidation_bonus / U256::from(10u64.pow(18)));
+    println!("  📉 Slippage Cost: {} ETH", weth_opportunity.swap_slippage / U256::from(10u64.pow(18)));
+    println!("  💵 NET PROFIT: {} ETH", weth_opportunity.estimated_profit / U256::from(10u64.pow(18)));
+    println!("  ✅ Profit-Based Choice: {}", if weth_opportunity.estimated_profit > high_bonus_opportunity.estimated_profit { "YES (higher profit)" } else { "NO" });
+    println!();
+
+    if weth_opportunity.estimated_profit > high_bonus_opportunity.estimated_profit {
+        let profit_diff = weth_opportunity.estimated_profit - high_bonus_opportunity.estimated_profit;
+        println!("🎯 RESULT: Profit-based selection wins by {} ETH!", profit_diff / U256::from(10u64.pow(18)));
+        println!("   This demonstrates why actual profit simulation beats heuristic scoring!");
+    } else {
+        println!("🤔 In this scenario, heuristic happened to be correct, but profit-based is always accurate.");
+    }
+    println!("\n");
 
     // Scenario 1: Profitable liquidation
     println!("📊 SCENARIO 1: Profitable Liquidation (Low Gas)");

@@ -10,7 +10,107 @@ use tracing::{debug, error, info, warn};
 
 use super::{assets, executor, profitability};
 use crate::database;
-use crate::models::{LiquidationAssetConfig, UserPosition};
+use crate::models::{LiquidationAssetConfig, LiquidationOpportunity, UserPosition};
+
+/// Find the most profitable liquidation pair by simulating all viable combinations
+async fn find_most_profitable_liquidation_pair<P>(
+    provider: Arc<P>,
+    assets: &std::collections::HashMap<Address, LiquidationAssetConfig>,
+    user_collateral_assets: &[Address],
+    user_debt_assets: &[Address],
+    user_position: &UserPosition,
+    min_profit_threshold: U256,
+) -> Result<Option<LiquidationOpportunity>>
+where
+    P: Provider,
+{
+    // Get all viable pairs
+    let viable_pairs = assets::get_all_viable_liquidation_pairs(
+        assets,
+        user_collateral_assets,
+        user_debt_assets,
+    );
+
+    if viable_pairs.is_empty() {
+        debug!("No viable liquidation pairs found");
+        return Ok(None);
+    }
+
+    info!("🔍 Evaluating {} viable liquidation pairs for maximum profit", viable_pairs.len());
+
+    let mut best_opportunity: Option<LiquidationOpportunity> = None;
+    let mut highest_profit = U256::ZERO;
+
+    // Simulate profitability for each viable pair
+    for (collateral_addr, debt_addr) in viable_pairs {
+        let collateral_asset = match assets::get_asset_config(assets, collateral_addr) {
+            Some(config) => config,
+            None => {
+                warn!("Collateral asset config not found for: {:?}", collateral_addr);
+                continue;
+            }
+        };
+        
+        let debt_asset = match assets::get_asset_config(assets, debt_addr) {
+            Some(config) => config,
+            None => {
+                warn!("Debt asset config not found for: {:?}", debt_addr);
+                continue;
+            }
+        };
+
+        debug!(
+            "💰 Simulating: {} collateral -> {} debt",
+            collateral_asset.symbol, debt_asset.symbol
+        );
+
+        // Calculate actual profitability for this pair
+        let opportunity = match profitability::calculate_liquidation_profitability(
+            provider.clone(),
+            user_position,
+            collateral_asset,
+            debt_asset,
+            min_profit_threshold,
+        ).await {
+            Ok(opp) => opp,
+            Err(e) => {
+                warn!(
+                    "Failed to calculate profitability for {} -> {}: {}",
+                    collateral_asset.symbol, debt_asset.symbol, e
+                );
+                continue;
+            }
+        };
+
+        debug!(
+            "   Estimated profit: {} wei (profitable: {})",
+            opportunity.estimated_profit, opportunity.profit_threshold_met
+        );
+
+        // Track the most profitable opportunity
+        if opportunity.estimated_profit > highest_profit {
+            highest_profit = opportunity.estimated_profit;
+            best_opportunity = Some(opportunity);
+            info!(
+                "🎯 New best pair: {} -> {} (profit: {} wei)",
+                collateral_asset.symbol, debt_asset.symbol, highest_profit
+            );
+        }
+    }
+
+    if let Some(ref opportunity) = best_opportunity {
+        info!(
+            "✅ Most profitable pair selected: {} -> {} (profit: {} wei)",
+            assets.get(&opportunity.collateral_asset).map(|a| a.symbol.as_str()).unwrap_or("Unknown"),
+            assets.get(&opportunity.debt_asset).map(|a| a.symbol.as_str()).unwrap_or("Unknown"),
+            opportunity.estimated_profit
+        );
+    } else {
+        info!("❌ No profitable liquidation pairs found above threshold");
+    }
+
+    Ok(best_opportunity)
+}
 
 /// Fetch user's actual collateral and debt assets from the blockchain
 async fn get_user_assets<P>(
@@ -183,39 +283,21 @@ where
         return Ok(());
     }
 
-    // Find the best liquidation pair
-    let (collateral_asset_addr, debt_asset_addr) = match assets::find_best_liquidation_pair(
+    // Find the most profitable liquidation pair by simulating all viable combinations
+    let opportunity = match find_most_profitable_liquidation_pair(
+        provider.clone(),
         asset_configs,
         &user_collateral_assets,
         &user_debt_assets,
-    ) {
-        Some(pair) => pair,
+        &user_position,
+        min_profit_threshold,
+    ).await? {
+        Some(opp) => opp,
         None => {
-            warn!("No suitable liquidation pair found for user: {:?}", user);
+            warn!("No profitable liquidation pair found for user: {:?}", user);
             return Ok(());
         }
     };
-
-    // Get asset configurations
-    let collateral_asset = assets::get_asset_config(asset_configs, collateral_asset_addr)
-        .ok_or_else(|| eyre::eyre!("Collateral asset config not found"))?;
-    let debt_asset = assets::get_asset_config(asset_configs, debt_asset_addr)
-        .ok_or_else(|| eyre::eyre!("Debt asset config not found"))?;
-
-    info!(
-        "📊 Analyzing liquidation: {} collateral -> {} debt",
-        collateral_asset.symbol, debt_asset.symbol
-    );
-
-    // Calculate profitability
-    let opportunity = profitability::calculate_liquidation_profitability(
-        provider.clone(),
-        &user_position,
-        collateral_asset,
-        debt_asset,
-        min_profit_threshold,
-    )
-    .await?;
 
     // Validate the opportunity
     if !profitability::validate_liquidation_opportunity(&opportunity, min_profit_threshold) {
