@@ -3,6 +3,8 @@ use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use eyre::Result;
 use crate::database::DatabasePool;
+use dashmap::DashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
@@ -282,6 +284,27 @@ where
                         Some(&format!("Liquidation execution failed: {}", e)),
                     )
                     .await?;
+
+                    // Update user position after failed liquidation to check if they've become safe
+                    // This handles cases like "user already repaid" where the position may no longer be at risk
+                    if let Err(update_err) = crate::monitoring::scanner::update_user_position(
+                        provider.clone(),
+                        pool_contract,
+                        db_pool,
+                        // We need empty DashMap and HashSet for the function signature but they won't be used meaningfully here
+                        Arc::new(DashMap::new()),
+                        Arc::new(parking_lot::RwLock::new(std::collections::HashSet::new())),
+                        // Create a dummy event sender since we don't need events here
+                        tokio::sync::mpsc::unbounded_channel().0,
+                        U256::from_str("1000000000000000000").unwrap(), // 1.0 health factor threshold
+                        user,
+                        None,
+                        None,
+                    ).await {
+                        warn!("Failed to update user position after liquidation failure: {}", update_err);
+                    } else {
+                        info!("Updated user position after failed liquidation for user: {}", user);
+                    }
 
                     return Err(e);
                 }
