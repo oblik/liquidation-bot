@@ -733,6 +733,56 @@ where
                 {
                     error!("Failed to log full rescan completion: {}", e);
                 }
+
+                // Perform user archival if enabled
+                if config.archive_zero_debt_users {
+                    info!("🗄️ Starting user archival process...");
+                    
+                    match crate::database::get_users_eligible_for_archival(
+                        &db_pool,
+                        config.zero_debt_cooldown_hours,
+                        config.safe_health_factor_threshold,
+                    ).await {
+                        Ok(eligible_users) => {
+                            if !eligible_users.is_empty() {
+                                info!(
+                                    "🗄️ Found {} users eligible for archival (zero debt for {}+ hours)",
+                                    eligible_users.len(),
+                                    config.zero_debt_cooldown_hours
+                                );
+
+                                let user_addresses: Vec<Address> = eligible_users.iter().map(|u| u.address).collect();
+                                
+                                match crate::database::archive_zero_debt_users(&db_pool, &user_addresses).await {
+                                    Ok(archived_count) => {
+                                        info!(
+                                            "✅ Successfully archived {} zero-debt users from database",
+                                            archived_count
+                                        );
+
+                                        // Log archival event
+                                        if let Err(e) = crate::database::log_monitoring_event(
+                                            &db_pool,
+                                            "users_archived",
+                                            None,
+                                            Some(&format!("archived {} zero-debt users", archived_count)),
+                                        ).await {
+                                            error!("Failed to log archival event: {}", e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to archive zero-debt users: {}", e);
+                                    }
+                                }
+                            } else {
+                                debug!("🗄️ No users eligible for archival at this time");
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to get users eligible for archival: {}", e);
+                        }
+                    }
+                }
             }
         }
 
@@ -764,23 +814,53 @@ pub async fn start_status_reporter(
             .filter(|entry| entry.value().health_factor < U256::from(LIQUIDATION_THRESHOLD))
             .count();
 
-        info!(
-            "📊 Status Report: {} positions tracked, {} at risk, {} liquidatable",
-            position_count, at_risk_count, liquidatable_count
-        );
+        // Get zero debt user count from database
+        let zero_debt_count = match crate::database::get_zero_debt_user_count(&db_pool).await {
+            Ok(count) => count,
+            Err(e) => {
+                error!("Failed to get zero debt user count: {}", e);
+                -1 // Indicate error in count
+            }
+        };
 
-        if let Err(e) = database::log_monitoring_event(
-            &db_pool,
-            "status_report",
-            None,
-            Some(&format!(
-                "positions:{}, at_risk:{}, liquidatable:{}",
+        if zero_debt_count >= 0 {
+            info!(
+                "📊 Status Report: {} positions tracked, {} at risk, {} liquidatable, {} zero debt",
+                position_count, at_risk_count, liquidatable_count, zero_debt_count
+            );
+
+            if let Err(e) = database::log_monitoring_event(
+                &db_pool,
+                "status_report",
+                None,
+                Some(&format!(
+                    "positions:{}, at_risk:{}, liquidatable:{}, zero_debt:{}",
+                    position_count, at_risk_count, liquidatable_count, zero_debt_count
+                )),
+            )
+            .await
+            {
+                error!("Failed to log status report: {}", e);
+            }
+        } else {
+            info!(
+                "📊 Status Report: {} positions tracked, {} at risk, {} liquidatable",
                 position_count, at_risk_count, liquidatable_count
-            )),
-        )
-        .await
-        {
-            error!("Failed to log status report: {}", e);
+            );
+
+            if let Err(e) = database::log_monitoring_event(
+                &db_pool,
+                "status_report",
+                None,
+                Some(&format!(
+                    "positions:{}, at_risk:{}, liquidatable:{}",
+                    position_count, at_risk_count, liquidatable_count
+                )),
+            )
+            .await
+            {
+                error!("Failed to log status report: {}", e);
+            }
         }
     }
 }

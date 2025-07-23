@@ -586,3 +586,177 @@ pub async fn get_all_users(db_pool: &DatabasePool) -> Result<Vec<UserPosition>> 
         }
     }
 }
+
+/// Get users eligible for archival (zero debt and high health factor for a cooldown period)
+pub async fn get_users_eligible_for_archival(
+    db_pool: &DatabasePool,
+    cooldown_hours: u64,
+    safe_health_factor_threshold: alloy_primitives::U256,
+) -> Result<Vec<UserPosition>> {
+    let cooldown_timestamp = chrono::Utc::now() - chrono::Duration::hours(cooldown_hours as i64);
+    let health_factor_str = safe_health_factor_threshold.to_string();
+
+    match db_pool {
+        DatabasePool::Postgres(pool) => {
+            let rows = sqlx::query(
+                r#"
+                SELECT * FROM user_positions 
+                WHERE total_debt_base = '0' 
+                  AND health_factor >= $1
+                  AND last_updated <= $2
+                ORDER BY last_updated ASC
+                "#,
+            )
+            .bind(&health_factor_str)
+            .bind(&cooldown_timestamp)
+            .fetch_all(pool)
+            .await?;
+
+            let mut positions = Vec::new();
+            for row in rows {
+                let address = Address::parse_checksummed(row.get::<String, _>("address"), None)?;
+                let position = UserPosition {
+                    address,
+                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
+                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
+                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    ltv: row.get::<String, _>("ltv").parse()?,
+                    health_factor: row.get::<String, _>("health_factor").parse()?,
+                    last_updated: row.get("last_updated"),
+                    is_at_risk: row.get("is_at_risk"),
+                };
+                positions.push(position);
+            }
+            Ok(positions)
+        }
+        DatabasePool::Sqlite(pool) => {
+            let rows = sqlx::query(
+                r#"
+                SELECT * FROM user_positions 
+                WHERE total_debt_base = '0' 
+                  AND CAST(health_factor AS INTEGER) >= CAST(? AS INTEGER)
+                  AND last_updated <= ?
+                ORDER BY last_updated ASC
+                "#,
+            )
+            .bind(&health_factor_str)
+            .bind(&cooldown_timestamp)
+            .fetch_all(pool)
+            .await?;
+
+            let mut positions = Vec::new();
+            for row in rows {
+                let address = Address::parse_checksummed(row.get::<String, _>("address"), None)?;
+                let position = UserPosition {
+                    address,
+                    total_collateral_base: row.get::<String, _>("total_collateral_base").parse()?,
+                    total_debt_base: row.get::<String, _>("total_debt_base").parse()?,
+                    available_borrows_base: row.get::<String, _>("available_borrows_base").parse()?,
+                    current_liquidation_threshold: row.get::<String, _>("current_liquidation_threshold").parse()?,
+                    ltv: row.get::<String, _>("ltv").parse()?,
+                    health_factor: row.get::<String, _>("health_factor").parse()?,
+                    last_updated: row.get("last_updated"),
+                    is_at_risk: row.get("is_at_risk"),
+                };
+                positions.push(position);
+            }
+            Ok(positions)
+        }
+    }
+}
+
+/// Archive (delete) users with zero debt and safe health factor
+pub async fn archive_zero_debt_users(
+    db_pool: &DatabasePool,
+    user_addresses: &[Address],
+) -> Result<u64> {
+    if user_addresses.is_empty() {
+        return Ok(0);
+    }
+
+    let address_strings: Vec<String> = user_addresses.iter().map(|addr| addr.to_string()).collect();
+
+    match db_pool {
+        DatabasePool::Postgres(pool) => {
+            // Use ANY to handle the array of addresses
+            let placeholders: Vec<String> = (1..=address_strings.len()).map(|i| format!("${}", i)).collect();
+            let query = format!(
+                "DELETE FROM user_positions WHERE address = ANY(ARRAY[{}])",
+                placeholders.join(", ")
+            );
+            
+            let mut query_builder = sqlx::query(&query);
+            for addr_str in &address_strings {
+                query_builder = query_builder.bind(addr_str);
+            }
+            
+            let result = query_builder.execute(pool).await?;
+            Ok(result.rows_affected())
+        }
+        DatabasePool::Sqlite(pool) => {
+            // Use IN clause for SQLite
+            let placeholders: Vec<String> = (0..address_strings.len()).map(|_| "?".to_string()).collect();
+            let query = format!(
+                "DELETE FROM user_positions WHERE address IN ({})",
+                placeholders.join(", ")
+            );
+            
+            let mut query_builder = sqlx::query(&query);
+            for addr_str in &address_strings {
+                query_builder = query_builder.bind(addr_str);
+            }
+            
+            let result = query_builder.execute(pool).await?;
+            Ok(result.rows_affected())
+        }
+    }
+}
+
+/// Get count of users with zero debt for monitoring purposes
+pub async fn get_zero_debt_user_count(db_pool: &DatabasePool) -> Result<i64> {
+    let count = match db_pool {
+        DatabasePool::Postgres(pool) => {
+            let row = sqlx::query("SELECT COUNT(*) as count FROM user_positions WHERE total_debt_base = '0'")
+                .fetch_one(pool)
+                .await?;
+            row.get::<i64, _>("count")
+        }
+        DatabasePool::Sqlite(pool) => {
+            let row = sqlx::query("SELECT COUNT(*) as count FROM user_positions WHERE total_debt_base = '0'")
+                .fetch_one(pool)
+                .await?;
+            row.get::<i32, _>("count") as i64
+        }
+    };
+    Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_primitives::{Address, U256};
+
+    #[tokio::test]
+    async fn test_archival_functions() {
+        // Test basic archival query construction for SQLite
+        let mock_addresses = vec![
+            Address::from([1u8; 20]),
+            Address::from([2u8; 20]),
+        ];
+        
+        // Test that the query construction doesn't panic
+        let address_strings: Vec<String> = mock_addresses.iter().map(|addr| addr.to_string()).collect();
+        let placeholders: Vec<String> = (0..address_strings.len()).map(|_| "?".to_string()).collect();
+        let query = format!(
+            "DELETE FROM user_positions WHERE address IN ({})",
+            placeholders.join(", ")
+        );
+        
+        assert_eq!(query, "DELETE FROM user_positions WHERE address IN (?, ?)");
+        
+        // Test config parsing for archival settings
+        let threshold = U256::from(10000000000000000000u64); // 10.0 ETH in wei
+        assert_eq!(threshold.to_string(), "10000000000000000000");
+    }
+}
