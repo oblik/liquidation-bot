@@ -588,9 +588,45 @@ where
     );
 
     // Separate archival interval to avoid timestamp conflicts
-    let mut archival_interval = tokio::time::interval(
-        tokio::time::Duration::from_secs((config.zero_debt_cooldown_hours * 60 * 60) / 4), // Check 4x per cooldown period
-    );
+    // Calculate archival interval with overflow protection and bounds checking
+    let archival_interval_secs = {
+        let cooldown_hours = config.zero_debt_cooldown_hours;
+
+        // Prevent zero duration which would cause continuous tight loop
+        if cooldown_hours == 0 {
+            warn!("zero_debt_cooldown_hours is 0, using minimum archival interval of 1 hour");
+            3600 // 1 hour minimum
+        } else {
+            // Check for potential overflow: cooldown_hours * 3600 should not overflow u64
+            let max_safe_hours = u64::MAX / 3600; // ~5.1 trillion hours
+            if cooldown_hours > max_safe_hours {
+                error!(
+                    "zero_debt_cooldown_hours ({}) is too large and would cause overflow, using maximum safe interval of 7 days",
+                    cooldown_hours
+                );
+                7 * 24 * 3600 // 7 days maximum
+            } else {
+                // Use checked multiplication to detect any remaining overflow edge cases
+                match cooldown_hours.checked_mul(3600) {
+                    Some(total_secs) => {
+                        let interval_secs = total_secs / 4; // Check 4x per cooldown period
+                                                            // Ensure minimum interval of 1 hour and maximum of 7 days
+                        std::cmp::max(3600, std::cmp::min(interval_secs, 7 * 24 * 3600))
+                    }
+                    None => {
+                        error!(
+                            "Integer overflow when calculating archival interval for {} hours, using 7 day default",
+                            cooldown_hours
+                        );
+                        7 * 24 * 3600 // 7 days fallback
+                    }
+                }
+            }
+        }
+    };
+
+    let mut archival_interval =
+        tokio::time::interval(tokio::time::Duration::from_secs(archival_interval_secs));
 
     loop {
         tokio::select! {
