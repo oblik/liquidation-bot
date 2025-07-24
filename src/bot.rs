@@ -96,11 +96,17 @@ where
                 info!("🔄 Loading all assets dynamically from Aave protocol...");
                 match liquidation::assets::init_assets_from_protocol(&*provider).await {
                     Ok(assets) => {
-                        info!("✅ Successfully loaded {} assets dynamically from Aave protocol", assets.len());
+                        info!(
+                            "✅ Successfully loaded {} assets dynamically from Aave protocol",
+                            assets.len()
+                        );
                         assets
                     }
                     Err(e) => {
-                        error!("❌ Failed to load assets dynamically from Aave protocol: {}", e);
+                        error!(
+                            "❌ Failed to load assets dynamically from Aave protocol: {}",
+                            e
+                        );
                         error!("🔄 Falling back to hardcoded asset configurations");
                         liquidation::assets::init_base_mainnet_assets()
                     }
@@ -110,7 +116,10 @@ where
                 info!("📁 Loading assets from config file: {}", file_path);
                 match liquidation::assets::init_assets_from_file(&*provider, file_path).await {
                     Ok(assets) => {
-                        info!("✅ Successfully loaded {} assets from config file", assets.len());
+                        info!(
+                            "✅ Successfully loaded {} assets from config file",
+                            assets.len()
+                        );
                         assets
                     }
                     Err(e) => {
@@ -140,7 +149,9 @@ where
                         warn!("⚠️  IMPORTANT: This fallback uses hardcoded asset IDs which may become incorrect");
                         warn!("⚠️  if Aave's reserve list ordering changes over time!");
                         warn!("🔍 To fix this issue:");
-                        warn!("   1. Verify the correct Aave V3 contract addresses for Base mainnet");
+                        warn!(
+                            "   1. Verify the correct Aave V3 contract addresses for Base mainnet"
+                        );
                         warn!("   2. Update BASE_POOL_ADDRESSES_PROVIDER and BASE_UI_POOL_DATA_PROVIDER");
                         warn!("   3. Check if Aave V3 is actually deployed on Base network");
                         liquidation::assets::init_base_mainnet_assets()
@@ -424,6 +435,7 @@ where
                 self.event_tx.clone(),
                 self.config.clone(),
                 self.asset_configs.clone(),
+                self.user_positions.clone(), // Add user_positions parameter
             ),
             scanner::start_status_reporter(self.db_pool.clone(), self.user_positions.clone(),),
         )?;

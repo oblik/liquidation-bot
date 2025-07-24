@@ -1,10 +1,10 @@
+use crate::database::DatabasePool;
 use alloy_contract::ContractInstance;
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use dashmap::DashMap;
 use eyre::Result;
 use parking_lot::RwLock as SyncRwLock;
-use crate::database::DatabasePool;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -559,28 +559,74 @@ pub async fn run_periodic_scan<P>(
     event_tx: mpsc::UnboundedSender<BotEvent>,
     config: BotConfig,
     _asset_configs: HashMap<Address, AssetConfig>,
+    user_positions: Arc<DashMap<Address, UserPosition>>, // Add user_positions parameter
 ) -> Result<()>
 where
     P: Provider,
 {
     info!("Starting periodic position scan...");
-    
+
     // Log configuration
     match config.at_risk_scan_limit {
-        Some(limit) => info!("🔧 At-risk scan limit configured: {} users per cycle", limit),
+        Some(limit) => info!(
+            "🔧 At-risk scan limit configured: {} users per cycle",
+            limit
+        ),
         None => info!("🔧 At-risk scan limit: unlimited"),
     }
-    info!("🔧 Full rescan interval: {} minutes", config.full_rescan_interval_minutes);
+    info!(
+        "🔧 Full rescan interval: {} minutes",
+        config.full_rescan_interval_minutes
+    );
 
     let mut interval = tokio::time::interval(
         tokio::time::Duration::from_secs(config.monitoring_interval_secs * 6), // Slower than event-driven updates
     );
-    
+
     let mut full_rescan_interval = tokio::time::interval(
         tokio::time::Duration::from_secs(config.full_rescan_interval_minutes * 60), // Full rescan interval
     );
-    
-    let mut last_full_rescan = std::time::Instant::now();
+
+    // Separate archival interval to avoid timestamp conflicts
+    // Calculate archival interval with overflow protection and bounds checking
+    let archival_interval_secs = {
+        let cooldown_hours = config.zero_debt_cooldown_hours;
+
+        // Prevent zero duration which would cause continuous tight loop
+        if cooldown_hours == 0 {
+            warn!("zero_debt_cooldown_hours is 0, using minimum archival interval of 1 hour");
+            3600 // 1 hour minimum
+        } else {
+            // Check for potential overflow: cooldown_hours * 3600 should not overflow u64
+            let max_safe_hours = u64::MAX / 3600; // ~5.1 trillion hours
+            if cooldown_hours > max_safe_hours {
+                error!(
+                    "zero_debt_cooldown_hours ({}) is too large and would cause overflow, using maximum safe interval of 7 days",
+                    cooldown_hours
+                );
+                7 * 24 * 3600 // 7 days maximum
+            } else {
+                // Use checked multiplication to detect any remaining overflow edge cases
+                match cooldown_hours.checked_mul(3600) {
+                    Some(total_secs) => {
+                        let interval_secs = total_secs / 4; // Check 4x per cooldown period
+                                                            // Ensure minimum interval of 1 hour and maximum of 7 days
+                        std::cmp::max(3600, std::cmp::min(interval_secs, 7 * 24 * 3600))
+                    }
+                    None => {
+                        error!(
+                            "Integer overflow when calculating archival interval for {} hours, using 7 day default",
+                            cooldown_hours
+                        );
+                        7 * 24 * 3600 // 7 days fallback
+                    }
+                }
+            }
+        }
+    };
+
+    let mut archival_interval =
+        tokio::time::interval(tokio::time::Duration::from_secs(archival_interval_secs));
 
     loop {
         tokio::select! {
@@ -653,7 +699,7 @@ where
             _ = full_rescan_interval.tick() => {
                 // Full rescan: check all users to ensure complete coverage
                 info!("🔍 Starting full rescan: checking all users to ensure complete coverage");
-                
+
                 let all_users = match crate::database::get_all_users(&db_pool).await {
                     Ok(users) => users,
                     Err(e) => {
@@ -663,7 +709,7 @@ where
                 };
 
                 info!("🔍 Full rescan: {} total users to check", all_users.len());
-                
+
                 let mut checked_users = 0;
                 let mut at_risk_users_count = 0;
                 let mut new_at_risk_found = 0;
@@ -686,7 +732,7 @@ where
 
                             if position.is_at_risk {
                                 at_risk_users_count += 1;
-                                
+
                                 // Check if this user was not previously at-risk
                                 if !user.is_at_risk {
                                     new_at_risk_found += 1;
@@ -695,7 +741,7 @@ where
                                         user.address,
                                         format_health_factor(position.health_factor)
                                     );
-                                    
+
                                     // Send to liquidation opportunity channel
                                     if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
                                         warn!("Failed to send liquidation opportunity: {}", e);
@@ -713,8 +759,6 @@ where
                     }
                 }
 
-                last_full_rescan = std::time::Instant::now();
-                
                 info!(
                     "✅ Full rescan complete: {}/{} users checked, {} at-risk found, {} new at-risk discovered",
                     checked_users, all_users.len(), at_risk_users_count, new_at_risk_found
@@ -732,6 +776,93 @@ where
                 .await
                 {
                     error!("Failed to log full rescan completion: {}", e);
+                }
+            }
+            _ = archival_interval.tick() => {
+                // Separate archival process - runs independently from full rescan
+                if config.archive_zero_debt_users {
+                    info!("🗄️ Starting user archival process...");
+
+                    match crate::database::get_users_eligible_for_archival(
+                        &db_pool,
+                        config.zero_debt_cooldown_hours,
+                        config.safe_health_factor_threshold,
+                    ).await {
+                        Ok(eligible_users) => {
+                            if !eligible_users.is_empty() {
+                                info!(
+                                    "🗄️ Found {} users eligible for archival (zero debt for {}+ hours)",
+                                    eligible_users.len(),
+                                    config.zero_debt_cooldown_hours
+                                );
+
+                                let user_addresses: Vec<Address> = eligible_users.iter().map(|u| u.address).collect();
+
+                                match crate::database::archive_zero_debt_users(
+                                    &db_pool,
+                                    &user_addresses,
+                                    config.zero_debt_cooldown_hours,
+                                    config.safe_health_factor_threshold,
+                                ).await {
+                                    Ok(archival_result) => {
+                                        info!(
+                                            "✅ Successfully archived {} zero-debt users from database",
+                                            archival_result.archived_count
+                                        );
+
+                                        // Remove ONLY the actually archived users from in-memory DashMap to prevent memory bloat
+                                        // This fixes the race condition where users might be removed from memory but not from database
+                                        let mut removed_from_memory = 0;
+                                        for &user_address in &archival_result.archived_addresses {
+                                            if user_positions.remove(&user_address).is_some() {
+                                                removed_from_memory += 1;
+                                                debug!("🗑️ Removed archived user {:?} from memory", user_address);
+                                            }
+                                        }
+
+                                        info!(
+                                            "🧠 Cleaned up {} archived users from memory (expected: {})",
+                                            removed_from_memory, archival_result.archived_count
+                                        );
+
+                                        // Log archival event with detailed information
+                                        if let Err(e) = crate::database::log_monitoring_event(
+                                            &db_pool,
+                                            "users_archived",
+                                            None,
+                                            Some(&format!(
+                                                "archived {} zero-debt users (db), cleaned {} from memory (actual: {})",
+                                                archival_result.archived_count,
+                                                removed_from_memory,
+                                                archival_result.archived_addresses.len()
+                                            )),
+                                        ).await {
+                                            error!("Failed to log archival event: {}", e);
+                                        }
+
+                                        // Warn if there's a mismatch between database and memory cleanup
+                                        if removed_from_memory != archival_result.archived_count {
+                                            warn!(
+                                                "🚨 Memory cleanup mismatch: removed {} from memory but archived {} from database",
+                                                removed_from_memory, archival_result.archived_count
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to archive zero-debt users: {}", e);
+                                    }
+                                }
+                            } else {
+                                debug!("🗄️ No users eligible for archival at this time");
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to get users eligible for archival: {}", e);
+                        }
+                    }
+                } else {
+                    // Archival is disabled, just tick the interval
+                    debug!("🗄️ User archival is disabled in configuration");
                 }
             }
         }
@@ -764,23 +895,53 @@ pub async fn start_status_reporter(
             .filter(|entry| entry.value().health_factor < U256::from(LIQUIDATION_THRESHOLD))
             .count();
 
-        info!(
-            "📊 Status Report: {} positions tracked, {} at risk, {} liquidatable",
-            position_count, at_risk_count, liquidatable_count
-        );
+        // Get zero debt user count from database
+        let zero_debt_count = match crate::database::get_zero_debt_user_count(&db_pool).await {
+            Ok(count) => count,
+            Err(e) => {
+                error!("Failed to get zero debt user count: {}", e);
+                -1 // Indicate error in count
+            }
+        };
 
-        if let Err(e) = database::log_monitoring_event(
-            &db_pool,
-            "status_report",
-            None,
-            Some(&format!(
-                "positions:{}, at_risk:{}, liquidatable:{}",
+        if zero_debt_count >= 0 {
+            info!(
+                "📊 Status Report: {} positions tracked, {} at risk, {} liquidatable, {} zero debt",
+                position_count, at_risk_count, liquidatable_count, zero_debt_count
+            );
+
+            if let Err(e) = database::log_monitoring_event(
+                &db_pool,
+                "status_report",
+                None,
+                Some(&format!(
+                    "positions:{}, at_risk:{}, liquidatable:{}, zero_debt:{}",
+                    position_count, at_risk_count, liquidatable_count, zero_debt_count
+                )),
+            )
+            .await
+            {
+                error!("Failed to log status report: {}", e);
+            }
+        } else {
+            info!(
+                "📊 Status Report: {} positions tracked, {} at risk, {} liquidatable",
                 position_count, at_risk_count, liquidatable_count
-            )),
-        )
-        .await
-        {
-            error!("Failed to log status report: {}", e);
+            );
+
+            if let Err(e) = database::log_monitoring_event(
+                &db_pool,
+                "status_report",
+                None,
+                Some(&format!(
+                    "positions:{}, at_risk:{}, liquidatable:{}",
+                    position_count, at_risk_count, liquidatable_count
+                )),
+            )
+            .await
+            {
+                error!("Failed to log status report: {}", e);
+            }
         }
     }
 }

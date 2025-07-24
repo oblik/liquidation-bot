@@ -32,6 +32,10 @@ pub struct BotConfig {
     pub asset_loading_method: AssetLoadingMethod,
     pub at_risk_scan_limit: Option<usize>, // Max users to check per scan cycle (None = unlimited)
     pub full_rescan_interval_minutes: u64, // How often to do a full rescan in minutes
+    // User archival configuration
+    pub archive_zero_debt_users: bool, // Whether to archive users with zero debt
+    pub zero_debt_cooldown_hours: u64, // Hours to wait before archiving users with zero debt
+    pub safe_health_factor_threshold: U256, // Health factor threshold above which users are considered "safe" (e.g., 10.0)
 }
 
 impl BotConfig {
@@ -203,6 +207,30 @@ impl BotConfig {
             Err(_) => 60, // Default to 60 minutes
         };
 
+        let archive_zero_debt_users = match std::env::var("ARCHIVE_ZERO_DEBT_USERS") {
+            Ok(value) => value.parse::<bool>().unwrap_or(false),
+            Err(_) => false,
+        };
+
+        let zero_debt_cooldown_hours = match std::env::var("ZERO_DEBT_COOLDOWN_HOURS") {
+            Ok(hours_str) => hours_str.parse::<u64>().unwrap_or(24), // Default to 24 hours
+            Err(_) => 24,
+        };
+
+        let safe_health_factor_threshold = match std::env::var("SAFE_HEALTH_FACTOR_THRESHOLD") {
+            Ok(threshold_str) => match threshold_str.parse::<U256>() {
+                Ok(threshold) => threshold,
+                Err(e) => {
+                    warn!(
+                        "Invalid SAFE_HEALTH_FACTOR_THRESHOLD '{}': {}. Using default 10.0.",
+                        threshold_str, e
+                    );
+                    U256::from(10000000000000000000u64) // 10.0 ETH wei default
+                }
+            },
+            Err(_) => U256::from(10000000000000000000u64), // 10.0 ETH wei default
+        };
+
         Ok(Self {
             rpc_url,
             ws_url,
@@ -217,6 +245,9 @@ impl BotConfig {
             asset_loading_method,
             at_risk_scan_limit,
             full_rescan_interval_minutes,
+            archive_zero_debt_users,
+            zero_debt_cooldown_hours,
+            safe_health_factor_threshold,
         })
     }
 }

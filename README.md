@@ -8,6 +8,7 @@ A production-ready Aave v3 liquidation bot for Base network, built with Rust and
 - **💰 Profitability Engine**: Advanced profit calculations including gas, fees, and slippage
 - **⚡ Flash Loan Liquidations**: Atomic liquidations via deployed smart contract
 - **📊 Database Persistence**: SQLite/PostgreSQL support for position tracking
+- **🗄️ Smart Archival**: Automatic cleanup of users with zero debt to prevent database bloat
 - **🔧 Base Mainnet Optimized**: Fully optimized for Base network with L2Pool integration
 - **🛡️ Production Hardened**: Comprehensive error handling and recovery mechanisms
 - **🚀 PostgreSQL Migration**: Built-in migration tool for upgrading from SQLite to PostgreSQL
@@ -53,6 +54,11 @@ ASSET_LOADING_METHOD=dynamic_with_fallback  # Options: dynamic_with_fallback, fu
 
 # Database
 DATABASE_URL=postgresql://username:password@localhost/liquidation_bot
+
+# User Archival Configuration (optional)
+ARCHIVE_ZERO_DEBT_USERS=true               # Enable archival of users with zero debt
+ZERO_DEBT_COOLDOWN_HOURS=24                # Hours to wait before archiving (default: 24)
+SAFE_HEALTH_FACTOR_THRESHOLD=10000000000000000000  # 10.0 ETH - minimum health factor for archival
 
 RUST_LOG=info
 ```
