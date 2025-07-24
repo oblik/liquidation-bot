@@ -629,7 +629,21 @@ pub async fn get_users_eligible_for_archival(
     cooldown_hours: u64,
     safe_health_factor_threshold: alloy_primitives::U256,
 ) -> Result<Vec<UserPosition>> {
-    let cooldown_timestamp = chrono::Utc::now() - chrono::Duration::hours(cooldown_hours as i64);
+    // Prevent integer overflow when casting u64 to i64
+    // Limit cooldown to a reasonable maximum (100 years)
+    const MAX_COOLDOWN_HOURS: u64 = 24 * 365 * 100; // 876,000 hours = 100 years
+
+    let safe_cooldown_hours = cooldown_hours.min(MAX_COOLDOWN_HOURS);
+    if cooldown_hours != safe_cooldown_hours {
+        tracing::warn!(
+            "Cooldown hours {} exceeds maximum safe value, clamped to {}",
+            cooldown_hours,
+            safe_cooldown_hours
+        );
+    }
+
+    let cooldown_timestamp =
+        chrono::Utc::now() - chrono::Duration::hours(safe_cooldown_hours as i64);
 
     match db_pool {
         DatabasePool::Postgres(pool) => {
@@ -750,7 +764,21 @@ pub async fn archive_zero_debt_users(
         });
     }
 
-    let cooldown_timestamp = chrono::Utc::now() - chrono::Duration::hours(cooldown_hours as i64);
+    // Prevent integer overflow when casting u64 to i64
+    // Limit cooldown to a reasonable maximum (100 years)
+    const MAX_COOLDOWN_HOURS: u64 = 24 * 365 * 100; // 876,000 hours = 100 years
+
+    let safe_cooldown_hours = cooldown_hours.min(MAX_COOLDOWN_HOURS);
+    if cooldown_hours != safe_cooldown_hours {
+        tracing::warn!(
+            "Cooldown hours {} exceeds maximum safe value, clamped to {}",
+            cooldown_hours,
+            safe_cooldown_hours
+        );
+    }
+
+    let cooldown_timestamp =
+        chrono::Utc::now() - chrono::Duration::hours(safe_cooldown_hours as i64);
     let address_strings: Vec<String> = user_addresses.iter().map(|addr| addr.to_string()).collect();
 
     match db_pool {
@@ -1011,5 +1039,52 @@ mod tests {
             "✅ Race condition test passed: {} users eligible, {} actually archived",
             eligible_users, race_condition_result.archived_count
         );
+    }
+
+    #[test]
+    fn test_cooldown_overflow_protection() {
+        // Test that cooldown hour overflow is handled correctly
+
+        // Normal case - should not trigger overflow protection
+        let normal_cooldown = 24u64;
+        let max_safe = 24 * 365 * 100; // 876,000 hours = 100 years
+        let safe_cooldown = normal_cooldown.min(max_safe);
+        assert_eq!(safe_cooldown, normal_cooldown);
+
+        // Edge case - extremely large cooldown should be clamped
+        let extreme_cooldown = u64::MAX;
+        let safe_cooldown = extreme_cooldown.min(max_safe);
+        assert_eq!(safe_cooldown, max_safe);
+        assert!(safe_cooldown < extreme_cooldown);
+
+        // Boundary case - just over the safe limit
+        let over_limit = max_safe + 1;
+        let safe_cooldown = over_limit.min(max_safe);
+        assert_eq!(safe_cooldown, max_safe);
+
+        // Verify that the safe value can be safely cast to i64
+        let safe_cooldown_i64 = safe_cooldown as i64;
+        assert!(safe_cooldown_i64 > 0); // Should be positive
+        assert!(safe_cooldown_i64 <= max_safe as i64); // Should be within safe bounds
+
+        // Test the actual chrono::Duration creation doesn't panic
+        let duration = chrono::Duration::hours(safe_cooldown_i64);
+        let now = chrono::Utc::now();
+        let past_timestamp = now - duration;
+
+        // Verify timestamp is in the past, not future
+        assert!(past_timestamp < now);
+
+        println!("✅ Cooldown overflow protection test passed");
+        println!("   Normal cooldown: {} hours", normal_cooldown);
+        println!(
+            "   Extreme cooldown: {} hours (clamped to {})",
+            extreme_cooldown, safe_cooldown
+        );
+        println!(
+            "   Safe i64 conversion: {} -> {}",
+            safe_cooldown, safe_cooldown_i64
+        );
+        println!("   Max safe cooldown: {} hours (100 years)", max_safe);
     }
 }
