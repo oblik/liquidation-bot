@@ -210,6 +210,8 @@ pub async fn handle_log_event(log: Log, event_tx: &mpsc::UnboundedSender<BotEven
 
     debug!("Processing log event with {} topics", topics.len());
 
+    let mut user_addresses = std::collections::HashSet::new();
+
     // Most Aave events have user address in topic[1] (after the event signature)
     if topics.len() >= 2 {
         // Extract the user address from topic[1] (assuming it's an address)
@@ -218,8 +220,7 @@ pub async fn handle_log_event(log: Log, event_tx: &mpsc::UnboundedSender<BotEven
             // Address is the last 20 bytes of the topic
             let addr_bytes = &user_bytes[12..32];
             if let Ok(user_addr) = Address::try_from(addr_bytes) {
-                debug!("Detected event for user: {}", user_addr);
-                let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr));
+                user_addresses.insert(user_addr);
             }
         }
     }
@@ -230,10 +231,15 @@ pub async fn handle_log_event(log: Log, event_tx: &mpsc::UnboundedSender<BotEven
         if user_bytes.len() >= 20 {
             let addr_bytes = &user_bytes[12..32];
             if let Ok(user_addr) = Address::try_from(addr_bytes) {
-                debug!("Detected additional event for user: {}", user_addr);
-                let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr));
+                user_addresses.insert(user_addr);
             }
         }
+    }
+
+    // Send events only for unique addresses to avoid duplicate update_user_position calls
+    for user_addr in user_addresses {
+        debug!("Detected event for user: {}", user_addr);
+        let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr));
     }
 
     Ok(())
