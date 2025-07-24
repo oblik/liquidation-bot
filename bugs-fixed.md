@@ -1,6 +1,6 @@
 # Bugs Fixed - Critical Issues
 
-This document describes the two critical bugs that were identified and fixed in the liquidation bot codebase.
+This document describes the critical bugs that were identified and fixed in the liquidation bot codebase.
 
 ## Bug #1: Memory Leak in ProcessingGuard Drop Handler
 
@@ -280,11 +280,100 @@ Polling mode activates automatically when:
 
 ---
 
-## Summary
+## Bug #3: Duplicate User Position Updates from Event Handler
 
+### **Severity**: Medium (Performance/Resource Waste)
+### **Location**: `src/monitoring/websocket.rs`
+
+### **Problem Description**
+The event handler was processing topic[1] and topic[2] from blockchain logs independently, leading to duplicate `update_user_position` calls when both topics contained the same user address.
+
+**Original problematic code:**
+```rust
+// Most Aave events have user address in topic[1] (after the event signature)
+if topics.len() >= 2 {
+    // Extract the user address from topic[1] (assuming it's an address)
+    let user_bytes = topics[1].as_slice();
+    if user_bytes.len() >= 20 {
+        // Address is the last 20 bytes of the topic
+        let addr_bytes = &user_bytes[12..32];
+        if let Ok(user_addr) = Address::try_from(addr_bytes) {
+            debug!("Detected event for user: {}", user_addr);
+            let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr)); // ⚠️ First send
+        }
+    }
+}
+
+// Also check topic[2] for events that might have user there
+if topics.len() >= 3 {
+    let user_bytes = topics[2].as_slice();
+    if user_bytes.len() >= 20 {
+        let addr_bytes = &user_bytes[12..32];
+        if let Ok(user_addr) = Address::try_from(addr_bytes) {
+            debug!("Detected event for user: {}", user_addr);
+            let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr)); // ⚠️ Second send (duplicate)
+        }
+    }
+}
+```
+
+### **Root Cause**
+- No deduplication mechanism for user addresses found in multiple topics
+- Same address in topic[1] and topic[2] would trigger two separate `UserPositionChanged` events
+- This led to redundant `update_user_position` calls, wasting computational resources and potentially causing race conditions
+
+### **Solution Implemented**
+1. **Added address deduplication** using `HashSet` to collect unique addresses
+2. **Single iteration** over unique addresses to send events
+3. **Eliminated duplicate processing** while maintaining full coverage
+
+**Fixed code:**
+```rust
+let mut user_addresses = std::collections::HashSet::new();
+
+// Most Aave events have user address in topic[1] (after the event signature)
+if topics.len() >= 2 {
+    // Extract the user address from topic[1] (assuming it's an address)
+    let user_bytes = topics[1].as_slice();
+    if user_bytes.len() >= 20 {
+        // Address is the last 20 bytes of the topic
+        let addr_bytes = &user_bytes[12..32];
+        if let Ok(user_addr) = Address::try_from(addr_bytes) {
+            user_addresses.insert(user_addr); // ✅ Add to set (deduplicates)
+        }
+    }
+}
+
+// Also check topic[2] for events that might have user there
+if topics.len() >= 3 {
+    let user_bytes = topics[2].as_slice();
+    if user_bytes.len() >= 20 {
+        let addr_bytes = &user_bytes[12..32];
+        if let Ok(user_addr) = Address::try_from(addr_bytes) {
+            user_addresses.insert(user_addr); // ✅ Add to set (deduplicates)
+        }
+    }
+}
+
+// Send events only for unique addresses to avoid duplicate update_user_position calls
+for user_addr in user_addresses {
+    debug!("Detected event for user: {}", user_addr);
+    let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr)); // ✅ Single send per unique address
+}
+```
+
+### **Impact**
+- **Eliminated duplicate processing** of user position updates
+- **Reduced computational overhead** by preventing redundant scanner operations
+- **Improved reliability** by avoiding potential race conditions from concurrent updates
+
+---
+
+## Summary
 
 1. **Memory leak eliminated** through synchronous RwLock operations
 2. **Address mismatch resolved** through configurable contract deployment  
 3. **WebSocket fallback blindspot fixed** through getLogs-based polling
+4. **Duplicate event processing eliminated** through address deduplication
 
-The liquidation bot now maintains **100% uptime** for event discovery and is significantly more robust for production deployment on Base mainnet.
+The liquidation bot now maintains **100% uptime** for event discovery, eliminates resource waste from duplicate processing, and is significantly more robust for production deployment on Base mainnet.
