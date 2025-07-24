@@ -798,7 +798,12 @@ where
 
                                 let user_addresses: Vec<Address> = eligible_users.iter().map(|u| u.address).collect();
 
-                                match crate::database::archive_zero_debt_users(&db_pool, &user_addresses).await {
+                                match crate::database::archive_zero_debt_users(
+                                    &db_pool,
+                                    &user_addresses,
+                                    config.zero_debt_cooldown_hours,
+                                    config.safe_health_factor_threshold,
+                                ).await {
                                     Ok(archived_count) => {
                                         info!(
                                             "✅ Successfully archived {} zero-debt users from database",

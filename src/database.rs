@@ -630,7 +630,6 @@ pub async fn get_users_eligible_for_archival(
     safe_health_factor_threshold: alloy_primitives::U256,
 ) -> Result<Vec<UserPosition>> {
     let cooldown_timestamp = chrono::Utc::now() - chrono::Duration::hours(cooldown_hours as i64);
-    let health_factor_str = safe_health_factor_threshold.to_string();
 
     match db_pool {
         DatabasePool::Postgres(pool) => {
@@ -729,42 +728,58 @@ pub async fn get_users_eligible_for_archival(
 }
 
 /// Archive (delete) users with zero debt and safe health factor
+/// This function re-verifies the archival criteria at deletion time to prevent race conditions
 pub async fn archive_zero_debt_users(
     db_pool: &DatabasePool,
     user_addresses: &[Address],
+    cooldown_hours: u64,
+    safe_health_factor_threshold: alloy_primitives::U256,
 ) -> Result<u64> {
     if user_addresses.is_empty() {
         return Ok(0);
     }
 
+    let cooldown_timestamp = chrono::Utc::now() - chrono::Duration::hours(cooldown_hours as i64);
     let address_strings: Vec<String> = user_addresses.iter().map(|addr| addr.to_string()).collect();
 
     match db_pool {
         DatabasePool::Postgres(pool) => {
-            // Use ANY to handle the array of addresses
+            // Use ANY to handle the array of addresses, but re-verify all archival criteria
             let placeholders: Vec<String> = (1..=address_strings.len())
                 .map(|i| format!("${}", i))
                 .collect();
             let query = format!(
-                "DELETE FROM user_positions WHERE address = ANY(ARRAY[{}])",
-                placeholders.join(", ")
+                r#"DELETE FROM user_positions 
+                WHERE address = ANY(ARRAY[{}])
+                  AND total_debt_base = '0'
+                  AND last_updated <= ${}
+                  AND CAST(health_factor AS NUMERIC) >= CAST(${}::TEXT AS NUMERIC)"#,
+                placeholders.join(", "),
+                address_strings.len() + 1,
+                address_strings.len() + 2
             );
 
             let mut query_builder = sqlx::query(&query);
             for addr_str in &address_strings {
                 query_builder = query_builder.bind(addr_str);
             }
+            query_builder = query_builder.bind(&cooldown_timestamp);
+            query_builder = query_builder.bind(safe_health_factor_threshold.to_string());
 
             let result = query_builder.execute(pool).await?;
             Ok(result.rows_affected())
         }
         DatabasePool::Sqlite(pool) => {
-            // Use IN clause for SQLite
+            // Use IN clause for SQLite, but re-verify all archival criteria
             let placeholders: Vec<String> = (0..address_strings.len())
                 .map(|_| "?".to_string())
                 .collect();
             let query = format!(
-                "DELETE FROM user_positions WHERE address IN ({})",
+                r#"DELETE FROM user_positions 
+                WHERE address IN ({})
+                  AND total_debt_base = '0'
+                  AND last_updated <= ?
+                  AND CAST(health_factor AS TEXT) >= ?"#,
                 placeholders.join(", ")
             );
 
@@ -772,6 +787,8 @@ pub async fn archive_zero_debt_users(
             for addr_str in &address_strings {
                 query_builder = query_builder.bind(addr_str);
             }
+            query_builder = query_builder.bind(&cooldown_timestamp);
+            query_builder = query_builder.bind(safe_health_factor_threshold.to_string());
 
             let result = query_builder.execute(pool).await?;
             Ok(result.rows_affected())
