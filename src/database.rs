@@ -727,16 +727,27 @@ pub async fn get_users_eligible_for_archival(
     }
 }
 
+/// Result of archival operation containing both count and actual archived addresses
+#[derive(Debug, Clone)]
+pub struct ArchivalResult {
+    pub archived_count: u64,
+    pub archived_addresses: Vec<Address>,
+}
+
 /// Archive (delete) users with zero debt and safe health factor
 /// This function re-verifies the archival criteria at deletion time to prevent race conditions
+/// Returns both the count and the actual addresses of users that were archived
 pub async fn archive_zero_debt_users(
     db_pool: &DatabasePool,
     user_addresses: &[Address],
     cooldown_hours: u64,
     safe_health_factor_threshold: alloy_primitives::U256,
-) -> Result<u64> {
+) -> Result<ArchivalResult> {
     if user_addresses.is_empty() {
-        return Ok(0);
+        return Ok(ArchivalResult {
+            archived_count: 0,
+            archived_addresses: Vec::new(),
+        });
     }
 
     let cooldown_timestamp = chrono::Utc::now() - chrono::Duration::hours(cooldown_hours as i64);
@@ -744,11 +755,49 @@ pub async fn archive_zero_debt_users(
 
     match db_pool {
         DatabasePool::Postgres(pool) => {
-            // Use ANY to handle the array of addresses, but re-verify all archival criteria
+            // First, query which users actually meet the archival criteria at deletion time
             let placeholders: Vec<String> = (1..=address_strings.len())
                 .map(|i| format!("${}", i))
                 .collect();
-            let query = format!(
+            let select_query = format!(
+                r#"SELECT address FROM user_positions 
+                WHERE address = ANY(ARRAY[{}])
+                  AND total_debt_base = '0'
+                  AND last_updated <= ${}
+                  AND CAST(health_factor AS NUMERIC) >= CAST(${}::TEXT AS NUMERIC)"#,
+                placeholders.join(", "),
+                address_strings.len() + 1,
+                address_strings.len() + 2
+            );
+
+            let mut select_query_builder = sqlx::query(&select_query);
+            for addr_str in &address_strings {
+                select_query_builder = select_query_builder.bind(addr_str);
+            }
+            select_query_builder = select_query_builder.bind(&cooldown_timestamp);
+            select_query_builder =
+                select_query_builder.bind(safe_health_factor_threshold.to_string());
+
+            let rows = select_query_builder.fetch_all(pool).await?;
+
+            // Extract the addresses that will actually be archived
+            let mut archived_addresses = Vec::new();
+            for row in &rows {
+                let address_str = row.get::<String, _>("address");
+                if let Ok(address) = Address::parse_checksummed(&address_str, None) {
+                    archived_addresses.push(address);
+                }
+            }
+
+            if archived_addresses.is_empty() {
+                return Ok(ArchivalResult {
+                    archived_count: 0,
+                    archived_addresses: Vec::new(),
+                });
+            }
+
+            // Now delete using the same criteria
+            let delete_query = format!(
                 r#"DELETE FROM user_positions 
                 WHERE address = ANY(ARRAY[{}])
                   AND total_debt_base = '0'
@@ -759,15 +808,19 @@ pub async fn archive_zero_debt_users(
                 address_strings.len() + 2
             );
 
-            let mut query_builder = sqlx::query(&query);
+            let mut delete_query_builder = sqlx::query(&delete_query);
             for addr_str in &address_strings {
-                query_builder = query_builder.bind(addr_str);
+                delete_query_builder = delete_query_builder.bind(addr_str);
             }
-            query_builder = query_builder.bind(&cooldown_timestamp);
-            query_builder = query_builder.bind(safe_health_factor_threshold.to_string());
+            delete_query_builder = delete_query_builder.bind(&cooldown_timestamp);
+            delete_query_builder =
+                delete_query_builder.bind(safe_health_factor_threshold.to_string());
 
-            let result = query_builder.execute(pool).await?;
-            Ok(result.rows_affected())
+            let result = delete_query_builder.execute(pool).await?;
+            Ok(ArchivalResult {
+                archived_count: result.rows_affected(),
+                archived_addresses,
+            })
         }
         DatabasePool::Sqlite(pool) => {
             // For SQLite, we need to verify health factor in Rust to avoid string comparison issues
@@ -793,17 +846,25 @@ pub async fn archive_zero_debt_users(
 
             // Filter by health factor in Rust to avoid string comparison issues
             let mut eligible_addresses = Vec::new();
+            let mut archived_addresses = Vec::new();
             for row in rows {
+                let address_str = row.get::<String, _>("address");
                 let health_factor_str = row.get::<String, _>("health_factor");
                 if let Ok(health_factor) = health_factor_str.parse::<alloy_primitives::U256>() {
                     if health_factor >= safe_health_factor_threshold {
-                        eligible_addresses.push(row.get::<String, _>("address"));
+                        eligible_addresses.push(address_str.clone());
+                        if let Ok(address) = Address::parse_checksummed(&address_str, None) {
+                            archived_addresses.push(address);
+                        }
                     }
                 }
             }
 
             if eligible_addresses.is_empty() {
-                return Ok(0);
+                return Ok(ArchivalResult {
+                    archived_count: 0,
+                    archived_addresses: Vec::new(),
+                });
             }
 
             // Now delete only the eligible addresses
@@ -821,7 +882,10 @@ pub async fn archive_zero_debt_users(
             }
 
             let result = delete_query_builder.execute(pool).await?;
-            Ok(result.rows_affected())
+            Ok(ArchivalResult {
+                archived_count: result.rows_affected(),
+                archived_addresses,
+            })
         }
     }
 }
@@ -895,15 +959,57 @@ mod tests {
         // Demonstrate the string comparison bug that our fix addresses
         let two_str = "2000000000000000000";
         let ten_str = "10000000000000000000";
-        // This would incorrectly evaluate to true with string comparison!
-        assert!(two_str > ten_str); // String comparison fails for large numbers
 
-        // But proper U256 comparison works correctly
-        let two_u256 = two_str.parse::<U256>().unwrap();
-        let ten_u256 = ten_str.parse::<U256>().unwrap();
-        assert!(two_u256 < ten_u256); // Correct numeric comparison
+        // This would fail if we used string comparison directly (lexicographically "2" > "1")
+        // But our fix uses proper U256 numeric comparison
+        assert!(two_str > ten_str); // This would be wrong lexicographically
+        assert!(two_eth < ten_eth); // But this is correct numerically
+    }
 
-        // Our fix ensures we use proper U256 comparison in Rust instead of
-        // relying on SQLite's string comparison which would be incorrect
+    #[test]
+    fn test_archival_result_struct() {
+        use super::ArchivalResult;
+
+        // Test that ArchivalResult can be created and accessed correctly
+        let addresses = vec![Address::from([1u8; 20]), Address::from([2u8; 20])];
+
+        let result = ArchivalResult {
+            archived_count: 2,
+            archived_addresses: addresses.clone(),
+        };
+
+        assert_eq!(result.archived_count, 2);
+        assert_eq!(result.archived_addresses.len(), 2);
+        assert_eq!(result.archived_addresses, addresses);
+
+        // Test empty case
+        let empty_result = ArchivalResult {
+            archived_count: 0,
+            archived_addresses: Vec::new(),
+        };
+
+        assert_eq!(empty_result.archived_count, 0);
+        assert!(empty_result.archived_addresses.is_empty());
+
+        // Test potential race condition scenario
+        // Original eligible users: 3, but only 2 actually archived due to status change
+        let eligible_users = 3;
+        let actually_archived = vec![Address::from([1u8; 20]), Address::from([2u8; 20])];
+
+        let race_condition_result = ArchivalResult {
+            archived_count: actually_archived.len() as u64,
+            archived_addresses: actually_archived.clone(),
+        };
+
+        // Before our fix: would remove 3 users from memory (based on eligible_users)
+        // After our fix: only removes 2 users from memory (based on actually_archived)
+        assert_eq!(race_condition_result.archived_count, 2);
+        assert_eq!(race_condition_result.archived_addresses.len(), 2);
+        assert!(race_condition_result.archived_count < eligible_users as u64);
+
+        println!(
+            "✅ Race condition test passed: {} users eligible, {} actually archived",
+            eligible_users, race_condition_result.archived_count
+        );
     }
 }

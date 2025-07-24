@@ -804,15 +804,16 @@ where
                                     config.zero_debt_cooldown_hours,
                                     config.safe_health_factor_threshold,
                                 ).await {
-                                    Ok(archived_count) => {
+                                    Ok(archival_result) => {
                                         info!(
                                             "✅ Successfully archived {} zero-debt users from database",
-                                            archived_count
+                                            archival_result.archived_count
                                         );
 
-                                        // Remove archived users from in-memory DashMap to prevent memory bloat
+                                        // Remove ONLY the actually archived users from in-memory DashMap to prevent memory bloat
+                                        // This fixes the race condition where users might be removed from memory but not from database
                                         let mut removed_from_memory = 0;
-                                        for &user_address in &user_addresses {
+                                        for &user_address in &archival_result.archived_addresses {
                                             if user_positions.remove(&user_address).is_some() {
                                                 removed_from_memory += 1;
                                                 debug!("🗑️ Removed archived user {:?} from memory", user_address);
@@ -821,17 +822,30 @@ where
 
                                         info!(
                                             "🧠 Cleaned up {} archived users from memory (expected: {})",
-                                            removed_from_memory, archived_count
+                                            removed_from_memory, archival_result.archived_count
                                         );
 
-                                        // Log archival event
+                                        // Log archival event with detailed information
                                         if let Err(e) = crate::database::log_monitoring_event(
                                             &db_pool,
                                             "users_archived",
                                             None,
-                                            Some(&format!("archived {} zero-debt users, cleaned {} from memory", archived_count, removed_from_memory)),
+                                            Some(&format!(
+                                                "archived {} zero-debt users (db), cleaned {} from memory (actual: {})",
+                                                archival_result.archived_count,
+                                                removed_from_memory,
+                                                archival_result.archived_addresses.len()
+                                            )),
                                         ).await {
                                             error!("Failed to log archival event: {}", e);
+                                        }
+
+                                        // Warn if there's a mismatch between database and memory cleanup
+                                        if removed_from_memory != archival_result.archived_count {
+                                            warn!(
+                                                "🚨 Memory cleanup mismatch: removed {} from memory but archived {} from database",
+                                                removed_from_memory, archival_result.archived_count
+                                            );
                                         }
                                     }
                                     Err(e) => {
