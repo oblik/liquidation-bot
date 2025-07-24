@@ -770,27 +770,57 @@ pub async fn archive_zero_debt_users(
             Ok(result.rows_affected())
         }
         DatabasePool::Sqlite(pool) => {
-            // Use IN clause for SQLite, but re-verify all archival criteria
+            // For SQLite, we need to verify health factor in Rust to avoid string comparison issues
+            // First, get all users that meet the other criteria
             let placeholders: Vec<String> = (0..address_strings.len())
                 .map(|_| "?".to_string())
                 .collect();
-            let query = format!(
-                r#"DELETE FROM user_positions 
+            let select_query = format!(
+                r#"SELECT address, health_factor FROM user_positions 
                 WHERE address IN ({})
                   AND total_debt_base = '0'
-                  AND last_updated <= ?
-                  AND CAST(health_factor AS TEXT) >= ?"#,
+                  AND last_updated <= ?"#,
                 placeholders.join(", ")
             );
 
-            let mut query_builder = sqlx::query(&query);
+            let mut select_query_builder = sqlx::query(&select_query);
             for addr_str in &address_strings {
-                query_builder = query_builder.bind(addr_str);
+                select_query_builder = select_query_builder.bind(addr_str);
             }
-            query_builder = query_builder.bind(&cooldown_timestamp);
-            query_builder = query_builder.bind(safe_health_factor_threshold.to_string());
+            select_query_builder = select_query_builder.bind(&cooldown_timestamp);
 
-            let result = query_builder.execute(pool).await?;
+            let rows = select_query_builder.fetch_all(pool).await?;
+
+            // Filter by health factor in Rust to avoid string comparison issues
+            let mut eligible_addresses = Vec::new();
+            for row in rows {
+                let health_factor_str = row.get::<String, _>("health_factor");
+                if let Ok(health_factor) = health_factor_str.parse::<alloy_primitives::U256>() {
+                    if health_factor >= safe_health_factor_threshold {
+                        eligible_addresses.push(row.get::<String, _>("address"));
+                    }
+                }
+            }
+
+            if eligible_addresses.is_empty() {
+                return Ok(0);
+            }
+
+            // Now delete only the eligible addresses
+            let delete_placeholders: Vec<String> = (0..eligible_addresses.len())
+                .map(|_| "?".to_string())
+                .collect();
+            let delete_query = format!(
+                "DELETE FROM user_positions WHERE address IN ({})",
+                delete_placeholders.join(", ")
+            );
+
+            let mut delete_query_builder = sqlx::query(&delete_query);
+            for addr_str in &eligible_addresses {
+                delete_query_builder = delete_query_builder.bind(addr_str);
+            }
+
+            let result = delete_query_builder.execute(pool).await?;
             Ok(result.rows_affected())
         }
     }
@@ -862,7 +892,18 @@ mod tests {
         assert!(ten_eth.to_string() == "10000000000000000000");
         assert!(two_eth < ten_eth); // Proper numeric comparison
 
-        // Lexicographical string comparison would incorrectly say "2000000000000000000" > "10000000000000000000"
-        // Our fix ensures we use proper U256/NUMERIC comparison instead
+        // Demonstrate the string comparison bug that our fix addresses
+        let two_str = "2000000000000000000";
+        let ten_str = "10000000000000000000";
+        // This would incorrectly evaluate to true with string comparison!
+        assert!(two_str > ten_str); // String comparison fails for large numbers
+
+        // But proper U256 comparison works correctly
+        let two_u256 = two_str.parse::<U256>().unwrap();
+        let ten_u256 = ten_str.parse::<U256>().unwrap();
+        assert!(two_u256 < ten_u256); // Correct numeric comparison
+
+        // Our fix ensures we use proper U256 comparison in Rust instead of
+        // relying on SQLite's string comparison which would be incorrect
     }
 }
