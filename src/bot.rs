@@ -8,9 +8,11 @@ use eyre::Result;
 use parking_lot::RwLock as SyncRwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::circuit_breaker::{CircuitBreaker, CircuitBreakerState};
 use crate::config::{AssetLoadingMethod, BotConfig};
 use crate::database;
 use crate::events::BotEvent;
@@ -40,6 +42,8 @@ pub struct LiquidationBot<P> {
     // Liquidation functionality
     liquidation_assets: HashMap<Address, LiquidationAssetConfig>,
     liquidator_contract_address: Option<Address>,
+    // Circuit breaker for extreme market conditions
+    circuit_breaker: Arc<CircuitBreaker>,
 }
 
 impl<P> LiquidationBot<P>
@@ -49,6 +53,32 @@ where
     /// Get a reference to the signer for transaction signing
     pub fn signer(&self) -> &PrivateKeySigner {
         &self.signer
+    }
+
+    /// Get circuit breaker status and statistics
+    pub fn get_circuit_breaker_status(&self) -> (CircuitBreakerState, crate::circuit_breaker::CircuitBreakerStats) {
+        (self.circuit_breaker.get_state(), self.circuit_breaker.get_stats())
+    }
+
+    /// Manually control circuit breaker state (for emergency situations)
+    pub async fn disable_circuit_breaker(&self) -> Result<()> {
+        self.circuit_breaker.disable().await
+    }
+
+    /// Re-enable circuit breaker after manual disable
+    pub async fn enable_circuit_breaker(&self) -> Result<()> {
+        self.circuit_breaker.enable().await
+    }
+
+    /// Start periodic circuit breaker status reporting
+    async fn run_circuit_breaker_status_reporter(&self) -> Result<()> {
+        let circuit_breaker = self.circuit_breaker.clone();
+        let mut interval = tokio::time::interval(Duration::from_secs(300)); // Report every 5 minutes
+
+        loop {
+            interval.tick().await;
+            circuit_breaker.log_status();
+        }
     }
     pub async fn new(
         provider: Arc<P>,
@@ -90,6 +120,9 @@ where
         // Initialize asset configurations for Base Sepolia
         let asset_configs = oracle::init_asset_configs();
 
+        // Initialize circuit breaker
+        let circuit_breaker = Arc::new(CircuitBreaker::new(config.clone()));
+        
         // Initialize liquidation asset configurations based on configuration
         let liquidation_assets = match &config.asset_loading_method {
             AssetLoadingMethod::FullyDynamic => {
@@ -190,6 +223,7 @@ where
             // Liquidation functionality
             liquidation_assets,
             liquidator_contract_address,
+            circuit_breaker,
         })
     }
 
@@ -225,6 +259,28 @@ where
                     }
                 }
                 BotEvent::LiquidationOpportunity(user) => {
+                    // Check circuit breaker before processing liquidation
+                    if !self.circuit_breaker.is_liquidation_allowed() {
+                        let state = self.circuit_breaker.get_state();
+                        warn!(
+                            "🚫 Liquidation blocked by circuit breaker (state: {:?}) for user: {:?}",
+                            state, user
+                        );
+                        self.circuit_breaker.record_blocked_liquidation();
+                        return;
+                    }
+
+                    info!("🎯 Processing liquidation opportunity for user: {:?}", user);
+                    
+                    // Record liquidation attempt for circuit breaker monitoring
+                    if let Err(e) = self.circuit_breaker.record_market_data(
+                        None, // Price will be updated separately via price feed updates
+                        true, // This is a liquidation occurrence
+                        Some(self.config.gas_price_multiplier),
+                    ).await {
+                        warn!("Failed to record market data for circuit breaker: {}", e);
+                    }
+
                     // Use enhanced liquidation handler if possible, fallback to legacy
                     if let Err(e) = liquidation::handle_liquidation_opportunity(
                         self.provider.clone(),
@@ -270,6 +326,16 @@ where
                 }
                 BotEvent::OraclePriceChanged(asset, new_price) => {
                     debug!("Oracle price changed for asset: {:?}", asset);
+                    
+                    // Record price change for circuit breaker monitoring
+                    if let Err(e) = self.circuit_breaker.record_market_data(
+                        Some(new_price),
+                        false, // This is not a liquidation
+                        Some(self.config.gas_price_multiplier),
+                    ).await {
+                        warn!("Failed to record price change for circuit breaker: {}", e);
+                    }
+                    
                     if let Err(e) = self.handle_oracle_price_change(asset, new_price).await {
                         error!("Error handling oracle price change: {}", e);
                     }
@@ -411,7 +477,7 @@ where
             warn!("Failed to populate initial collateral mapping: {}", e);
         }
 
-        // Start all monitoring services
+        // Start all monitoring services including circuit breaker
         tokio::try_join!(
             websocket::start_event_monitoring(
                 self.provider.clone(),
@@ -438,6 +504,8 @@ where
                 self.user_positions.clone(), // Add user_positions parameter
             ),
             scanner::start_status_reporter(self.db_pool.clone(), self.user_positions.clone(),),
+            self.circuit_breaker.run_alert_processor(),
+            self.run_circuit_breaker_status_reporter(),
         )?;
 
         Ok(())
