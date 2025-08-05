@@ -46,25 +46,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Scenario 1: Normal Market Conditions");
     demo_normal_conditions().await?;
 
-    println!("\n" + "=".repeat(50) + "\n");
+    println!("\n{}\n", "=".repeat(50));
 
     // Scenario 2: Price Volatility Trigger
     println!("📊 Scenario 2: Extreme Price Volatility");
     demo_price_volatility().await?;
 
-    println!("\n" + "=".repeat(50) + "\n");
+    println!("\n{}\n", "=".repeat(50));
 
     // Scenario 3: Liquidation Flood
     println!("📊 Scenario 3: Liquidation Flood");
     demo_liquidation_flood().await?;
 
-    println!("\n" + "=".repeat(50) + "\n");
+    println!("\n{}\n", "=".repeat(50));
 
     // Scenario 4: Gas Price Spike
     println!("📊 Scenario 4: Gas Price Spike");
     demo_gas_spike().await?;
 
-    println!("\n" + "=".repeat(50) + "\n");
+    println!("\n{}\n", "=".repeat(50));
 
     // Scenario 5: Recovery Process
     println!("📊 Scenario 5: Recovery Process");

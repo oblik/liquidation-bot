@@ -56,8 +56,16 @@ where
     }
 
     /// Get circuit breaker status and statistics
-    pub fn get_circuit_breaker_status(&self) -> (CircuitBreakerState, crate::circuit_breaker::CircuitBreakerStats) {
-        (self.circuit_breaker.get_state(), self.circuit_breaker.get_stats())
+    pub fn get_circuit_breaker_status(
+        &self,
+    ) -> (
+        CircuitBreakerState,
+        crate::circuit_breaker::CircuitBreakerStats,
+    ) {
+        (
+            self.circuit_breaker.get_state(),
+            self.circuit_breaker.get_stats(),
+        )
     }
 
     /// Manually control circuit breaker state (for emergency situations)
@@ -122,7 +130,7 @@ where
 
         // Initialize circuit breaker
         let circuit_breaker = Arc::new(CircuitBreaker::new(config.clone()));
-        
+
         // Initialize liquidation asset configurations based on configuration
         let liquidation_assets = match &config.asset_loading_method {
             AssetLoadingMethod::FullyDynamic => {
@@ -267,17 +275,21 @@ where
                             state, user
                         );
                         self.circuit_breaker.record_blocked_liquidation();
-                        return;
+                        continue;
                     }
 
                     info!("🎯 Processing liquidation opportunity for user: {:?}", user);
-                    
+
                     // Record liquidation attempt for circuit breaker monitoring
-                    if let Err(e) = self.circuit_breaker.record_market_data(
-                        None, // Price will be updated separately via price feed updates
-                        true, // This is a liquidation occurrence
-                        Some(self.config.gas_price_multiplier),
-                    ).await {
+                    if let Err(e) = self
+                        .circuit_breaker
+                        .record_market_data(
+                            None, // Price will be updated separately via price feed updates
+                            true, // This is a liquidation occurrence
+                            Some(self.config.gas_price_multiplier),
+                        )
+                        .await
+                    {
                         warn!("Failed to record market data for circuit breaker: {}", e);
                     }
 
@@ -326,16 +338,20 @@ where
                 }
                 BotEvent::OraclePriceChanged(asset, new_price) => {
                     debug!("Oracle price changed for asset: {:?}", asset);
-                    
+
                     // Record price change for circuit breaker monitoring
-                    if let Err(e) = self.circuit_breaker.record_market_data(
-                        Some(new_price),
-                        false, // This is not a liquidation
-                        Some(self.config.gas_price_multiplier),
-                    ).await {
+                    if let Err(e) = self
+                        .circuit_breaker
+                        .record_market_data(
+                            Some(new_price),
+                            false, // This is not a liquidation
+                            Some(self.config.gas_price_multiplier),
+                        )
+                        .await
+                    {
                         warn!("Failed to record price change for circuit breaker: {}", e);
                     }
-                    
+
                     if let Err(e) = self.handle_oracle_price_change(asset, new_price).await {
                         error!("Error handling oracle price change: {}", e);
                     }

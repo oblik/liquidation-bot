@@ -73,7 +73,7 @@ pub struct CircuitBreaker {
 }
 
 /// Statistics for circuit breaker performance
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CircuitBreakerStats {
     pub total_activations: u64,
     pub total_liquidations_blocked: u64,
@@ -118,14 +118,17 @@ impl CircuitBreaker {
     /// Create a new circuit breaker instance
     pub fn new(config: BotConfig) -> Self {
         let (alert_tx, alert_rx) = mpsc::unbounded_channel();
-        
+
         let initial_state = if config.circuit_breaker_enabled {
             CircuitBreakerState::Closed
         } else {
             CircuitBreakerState::Disabled
         };
 
-        info!("🔒 Circuit breaker initialized in state: {:?}", initial_state);
+        info!(
+            "🔒 Circuit breaker initialized in state: {:?}",
+            initial_state
+        );
         info!(
             "📊 Monitoring thresholds - Volatility: {}%, Liquidations/min: {}, Gas multiplier: {}-{}",
             config.max_price_volatility_threshold,
@@ -182,7 +185,8 @@ impl CircuitBreaker {
             market_data.push_back(data_point.clone());
 
             // Keep only data within monitoring window
-            let cutoff_time = Instant::now() - Duration::from_secs(self.config.circuit_breaker_monitoring_window_secs);
+            let cutoff_time = Instant::now()
+                - Duration::from_secs(self.config.circuit_breaker_monitoring_window_secs);
             while let Some(front) = market_data.front() {
                 if front.timestamp < cutoff_time {
                     market_data.pop_front();
@@ -221,8 +225,9 @@ impl CircuitBreaker {
 
         // Check liquidation frequency
         let liquidation_count = self.count_recent_liquidations(&market_data);
-        let liquidations_per_minute = liquidation_count * 60 / self.config.circuit_breaker_monitoring_window_secs;
-        
+        let liquidations_per_minute =
+            liquidation_count * 60 / self.config.circuit_breaker_monitoring_window_secs;
+
         if liquidations_per_minute > self.config.max_liquidations_per_minute {
             triggered_conditions.push(MarketCondition::LiquidationFlood {
                 liquidations_per_minute,
@@ -264,7 +269,9 @@ impl CircuitBreaker {
             for condition in &conditions {
                 match condition {
                     MarketCondition::ExtremeVolatility { .. } => stats.volatility_triggers += 1,
-                    MarketCondition::LiquidationFlood { .. } => stats.liquidation_flood_triggers += 1,
+                    MarketCondition::LiquidationFlood { .. } => {
+                        stats.liquidation_flood_triggers += 1
+                    }
                     MarketCondition::GasPriceSpike { .. } => stats.gas_spike_triggers += 1,
                     MarketCondition::MultipleConditions { .. } => {
                         // Multiple conditions already counted individually
@@ -277,10 +284,7 @@ impl CircuitBreaker {
             conditions.into_iter().next().unwrap()
         } else {
             MarketCondition::MultipleConditions {
-                conditions: conditions
-                    .iter()
-                    .map(|c| format!("{:?}", c))
-                    .collect(),
+                conditions: conditions.iter().map(|c| format!("{:?}", c)).collect(),
             }
         };
 
@@ -295,7 +299,7 @@ impl CircuitBreaker {
         };
 
         error!("{}", alert.message);
-        
+
         // Update stats with reason
         {
             let mut stats = self.stats.write();
@@ -321,7 +325,9 @@ impl CircuitBreaker {
 
         let alert = CircuitBreakerAlert {
             timestamp: SystemTime::now(),
-            condition: MarketCondition::ExtremeVolatility { volatility_percent: 0.0 }, // Placeholder
+            condition: MarketCondition::ExtremeVolatility {
+                volatility_percent: 0.0,
+            }, // Placeholder
             state_change: CircuitBreakerState::Closed,
             message: "✅ Circuit breaker CLOSED - Normal operations resumed".to_string(),
         };
@@ -352,9 +358,12 @@ impl CircuitBreaker {
 
                     let alert = CircuitBreakerAlert {
                         timestamp: SystemTime::now(),
-                        condition: MarketCondition::ExtremeVolatility { volatility_percent: 0.0 }, // Placeholder
+                        condition: MarketCondition::ExtremeVolatility {
+                            volatility_percent: 0.0,
+                        }, // Placeholder
                         state_change: CircuitBreakerState::HalfOpen,
-                        message: "🟡 Circuit breaker HALF-OPEN - Testing market conditions".to_string(),
+                        message: "🟡 Circuit breaker HALF-OPEN - Testing market conditions"
+                            .to_string(),
                     };
 
                     warn!("{}", alert.message);
@@ -435,7 +444,9 @@ impl CircuitBreaker {
 
         let alert = CircuitBreakerAlert {
             timestamp: SystemTime::now(),
-            condition: MarketCondition::ExtremeVolatility { volatility_percent: 0.0 }, // Placeholder
+            condition: MarketCondition::ExtremeVolatility {
+                volatility_percent: 0.0,
+            }, // Placeholder
             state_change: CircuitBreakerState::Disabled,
             message: "⚠️ Circuit breaker MANUALLY DISABLED by operator".to_string(),
         };
@@ -458,7 +469,9 @@ impl CircuitBreaker {
 
         let alert = CircuitBreakerAlert {
             timestamp: SystemTime::now(),
-            condition: MarketCondition::ExtremeVolatility { volatility_percent: 0.0 }, // Placeholder
+            condition: MarketCondition::ExtremeVolatility {
+                volatility_percent: 0.0,
+            }, // Placeholder
             state_change: CircuitBreakerState::Closed,
             message: "✅ Circuit breaker MANUALLY ENABLED by operator".to_string(),
         };
@@ -479,7 +492,9 @@ impl CircuitBreaker {
     }
 
     /// Get alert receiver for monitoring circuit breaker events
-    pub fn get_alert_receiver(&self) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<CircuitBreakerAlert>>> {
+    pub fn get_alert_receiver(
+        &self,
+    ) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<CircuitBreakerAlert>>> {
         self.alert_rx.clone()
     }
 
@@ -509,7 +524,7 @@ impl CircuitBreaker {
             // - Send email notification
             // - Write to monitoring system
             // - Update dashboard
-            
+
             // Example: Send to external monitoring system
             if let Err(e) = self.send_external_alert(&alert).await {
                 error!("Failed to send external alert: {}", e);
@@ -526,11 +541,12 @@ impl CircuitBreaker {
         // - PagerDuty
         // - Email service
         // - Custom monitoring dashboard
-        
+
         info!(
             "External alert sent: {} at {}",
             alert.message,
-            alert.timestamp
+            alert
+                .timestamp
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs()
@@ -554,7 +570,8 @@ impl CircuitBreaker {
                 - instant.elapsed().as_secs()
         });
 
-        let time_since_last_activation_secs = last_activation.map(|instant| instant.elapsed().as_secs());
+        let time_since_last_activation_secs =
+            last_activation.map(|instant| instant.elapsed().as_secs());
 
         let current_conditions = self.get_current_market_conditions(&market_data);
 
@@ -575,7 +592,10 @@ impl CircuitBreaker {
     }
 
     /// Get current market conditions snapshot
-    fn get_current_market_conditions(&self, market_data: &VecDeque<MarketDataPoint>) -> CurrentMarketConditions {
+    fn get_current_market_conditions(
+        &self,
+        market_data: &VecDeque<MarketDataPoint>,
+    ) -> CurrentMarketConditions {
         let current_volatility_percent = self.calculate_price_volatility(market_data);
         let current_liquidations_per_minute = {
             let liquidation_count = self.count_recent_liquidations(market_data);
@@ -598,20 +618,22 @@ impl CircuitBreaker {
             let mut state = self.state.write();
             let mut last_activation = self.last_activation.write();
             let mut market_data = self.market_data.write();
-            
+
             *state = if self.config.circuit_breaker_enabled {
                 CircuitBreakerState::Closed
             } else {
                 CircuitBreakerState::Disabled
             };
-            
+
             *last_activation = None;
             market_data.clear();
         }
 
         let alert = CircuitBreakerAlert {
             timestamp: SystemTime::now(),
-            condition: MarketCondition::ExtremeVolatility { volatility_percent: 0.0 }, // Placeholder
+            condition: MarketCondition::ExtremeVolatility {
+                volatility_percent: 0.0,
+            }, // Placeholder
             state_change: CircuitBreakerState::Closed,
             message: "🔄 Circuit breaker RESET by operator - All history cleared".to_string(),
         };
@@ -628,7 +650,7 @@ impl CircuitBreaker {
     /// Check if conditions are improving (for monitoring dashboards)
     pub fn are_conditions_improving(&self) -> bool {
         let market_data = self.market_data.read();
-        
+
         if market_data.len() < 5 {
             return false; // Not enough data
         }
@@ -639,12 +661,21 @@ impl CircuitBreaker {
         let older_data: Vec<_> = market_data.iter().take(recent_half).collect();
 
         // Compare liquidation rates
-        let recent_liquidations = recent_data.iter().filter(|p| p.liquidation_occurred).count();
+        let recent_liquidations = recent_data
+            .iter()
+            .filter(|p| p.liquidation_occurred)
+            .count();
         let older_liquidations = older_data.iter().filter(|p| p.liquidation_occurred).count();
 
         // Compare gas prices (if available)
-        let recent_gas = recent_data.iter().filter_map(|p| p.gas_price_multiplier).collect::<Vec<_>>();
-        let older_gas = older_data.iter().filter_map(|p| p.gas_price_multiplier).collect::<Vec<_>>();
+        let recent_gas = recent_data
+            .iter()
+            .filter_map(|p| p.gas_price_multiplier)
+            .collect::<Vec<_>>();
+        let older_gas = older_data
+            .iter()
+            .filter_map(|p| p.gas_price_multiplier)
+            .collect::<Vec<_>>();
 
         let gas_improving = if !recent_gas.is_empty() && !older_gas.is_empty() {
             let recent_avg = recent_gas.iter().sum::<u64>() as f64 / recent_gas.len() as f64;
@@ -667,12 +698,13 @@ impl CircuitBreaker {
 
         // Deduct points for current volatility
         if let Some(volatility) = current_conditions.current_volatility_percent {
-            let volatility_penalty = ((volatility / self.config.max_price_volatility_threshold) * 30.0) as u8;
+            let volatility_penalty =
+                ((volatility / self.config.max_price_volatility_threshold) * 30.0) as u8;
             score = score.saturating_sub(volatility_penalty.min(30));
         }
 
         // Deduct points for liquidation frequency
-        let liquidation_ratio = current_conditions.current_liquidations_per_minute as f64 
+        let liquidation_ratio = current_conditions.current_liquidations_per_minute as f64
             / self.config.max_liquidations_per_minute as f64;
         let liquidation_penalty = (liquidation_ratio * 30.0) as u8;
         score = score.saturating_sub(liquidation_penalty.min(30));
@@ -703,23 +735,37 @@ impl CircuitBreaker {
         info!("   State: {:?}", status_report.state);
         info!("   Health Score: {}/100", health_score);
         info!("   Conditions Improving: {}", improving);
-        info!("   Total Activations: {}", status_report.stats.total_activations);
-        info!("   Liquidations Blocked: {}", status_report.stats.total_liquidations_blocked);
-        
+        info!(
+            "   Total Activations: {}",
+            status_report.stats.total_activations
+        );
+        info!(
+            "   Liquidations Blocked: {}",
+            status_report.stats.total_liquidations_blocked
+        );
+
         if let Some(volatility) = status_report.current_conditions.current_volatility_percent {
-            info!("   Current Volatility: {:.2}% (max: {:.2}%)", 
-                volatility, status_report.thresholds.max_price_volatility_threshold);
+            info!(
+                "   Current Volatility: {:.2}% (max: {:.2}%)",
+                volatility, status_report.thresholds.max_price_volatility_threshold
+            );
         }
-        
-        info!("   Liquidations/min: {} (max: {})", 
-            status_report.current_conditions.current_liquidations_per_minute,
-            status_report.thresholds.max_liquidations_per_minute);
-            
+
+        info!(
+            "   Liquidations/min: {} (max: {})",
+            status_report
+                .current_conditions
+                .current_liquidations_per_minute,
+            status_report.thresholds.max_liquidations_per_minute
+        );
+
         if let Some(gas) = status_report.current_conditions.current_gas_multiplier {
-            info!("   Gas Multiplier: {}x (max: {}x)", 
-                gas, status_report.thresholds.max_gas_price_multiplier);
+            info!(
+                "   Gas Multiplier: {}x (max: {}x)",
+                gas, status_report.thresholds.max_gas_price_multiplier
+            );
         }
-        
+
         if let Some(time_since) = status_report.time_since_last_activation_secs {
             info!("   Time Since Last Activation: {}s", time_since);
         }
@@ -736,7 +782,8 @@ mod tests {
         BotConfig {
             rpc_url: "http://localhost:8545".to_string(),
             ws_url: "ws://localhost:8546".to_string(),
-            private_key: "0x0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+            private_key: "0x0000000000000000000000000000000000000000000000000000000000000001"
+                .to_string(),
             liquidator_contract: None,
             min_profit_threshold: U256::from(1000000000000000000u64), // 1 ETH
             gas_price_multiplier: 2,
@@ -752,7 +799,7 @@ mod tests {
             safe_health_factor_threshold: U256::from(10000000000000000000u64), // 10.0
             circuit_breaker_enabled: true,
             max_price_volatility_threshold: 5.0, // 5% for testing
-            max_liquidations_per_minute: 3, // Low threshold for testing
+            max_liquidations_per_minute: 3,      // Low threshold for testing
             circuit_breaker_monitoring_window_secs: 60,
             circuit_breaker_cooldown_secs: 5, // Short cooldown for testing
             min_gas_price_multiplier: 1,
@@ -1021,7 +1068,7 @@ mod tests {
 
         // Record normal market conditions
         let base_price = U256::from(50000 * 10u128.pow(18));
-        
+
         // Small price changes (under threshold)
         circuit_breaker
             .record_market_data(Some(base_price), false, Some(2))
