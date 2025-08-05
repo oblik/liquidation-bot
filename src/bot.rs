@@ -268,11 +268,11 @@ where
                 }
                 BotEvent::LiquidationOpportunity(user) => {
                     // Check circuit breaker before processing liquidation
+                    let circuit_breaker_state = self.circuit_breaker.get_state();
                     if !self.circuit_breaker.is_liquidation_allowed() {
-                        let state = self.circuit_breaker.get_state();
                         warn!(
                             "🚫 Liquidation blocked by circuit breaker (state: {:?}) for user: {:?}",
-                            state, user
+                            circuit_breaker_state, user
                         );
                         self.circuit_breaker.record_blocked_liquidation();
                         continue;
@@ -280,21 +280,17 @@ where
 
                     info!("🎯 Processing liquidation opportunity for user: {:?}", user);
 
-                    // Record liquidation attempt for circuit breaker monitoring
-                    if let Err(e) = self
-                        .circuit_breaker
-                        .record_market_data(
-                            None, // Price will be updated separately via price feed updates
-                            true, // This is a liquidation occurrence
-                            Some(self.config.gas_price_multiplier),
-                        )
-                        .await
-                    {
-                        warn!("Failed to record market data for circuit breaker: {}", e);
-                    }
+                    // Get current gas price for circuit breaker monitoring
+                    let current_gas_price = match self.provider.get_gas_price().await {
+                        Ok(price) => Some(alloy_primitives::U256::from(price)),
+                        Err(e) => {
+                            warn!("Failed to get current gas price: {}", e);
+                            None
+                        }
+                    };
 
-                    // Use enhanced liquidation handler if possible, fallback to legacy
-                    if let Err(e) = liquidation::handle_liquidation_opportunity(
+                    // Execute liquidation first, then record success/failure
+                    let liquidation_result = liquidation::handle_liquidation_opportunity(
                         self.provider.clone(),
                         &self.db_pool,
                         user,
@@ -304,8 +300,12 @@ where
                         &self.pool_contract,
                         &self.liquidation_assets,
                     )
-                    .await
-                    {
+                    .await;
+
+                    let liquidation_succeeded = liquidation_result.is_ok();
+
+                    // Handle liquidation failure with fallback
+                    if let Err(e) = liquidation_result {
                         error!(
                             "Failed to handle liquidation opportunity for {:?}: {}",
                             user, e
@@ -321,6 +321,31 @@ where
                         {
                             error!("Legacy liquidation handler also failed: {}", legacy_err);
                         }
+                    }
+
+                    // Record liquidation attempt AFTER execution with actual outcome
+                    if let Err(e) = self
+                        .circuit_breaker
+                        .record_market_data(
+                            None,                  // Price will be updated separately via price feed updates
+                            liquidation_succeeded, // Only record if liquidation actually succeeded
+                            current_gas_price,
+                        )
+                        .await
+                    {
+                        warn!("Failed to record market data for circuit breaker: {}", e);
+                    }
+
+                    // If we're in half-open state and liquidation succeeded, record test liquidation
+                    if circuit_breaker_state
+                        == crate::circuit_breaker::CircuitBreakerState::HalfOpen
+                        && liquidation_succeeded
+                    {
+                        self.circuit_breaker.record_test_liquidation();
+                        info!(
+                            "📊 Recorded test liquidation in half-open state for user: {:?}",
+                            user
+                        );
                     }
                 }
                 BotEvent::PriceUpdate(asset, _old_price, _new_price) => {
@@ -339,13 +364,21 @@ where
                 BotEvent::OraclePriceChanged(asset, new_price) => {
                     debug!("Oracle price changed for asset: {:?}", asset);
 
-                    // Record price change for circuit breaker monitoring
+                    // Record price change for circuit breaker monitoring with current gas price
+                    let current_gas_price = match self.provider.get_gas_price().await {
+                        Ok(price) => Some(alloy_primitives::U256::from(price)),
+                        Err(e) => {
+                            warn!("Failed to get current gas price for price update: {}", e);
+                            None
+                        }
+                    };
+
                     if let Err(e) = self
                         .circuit_breaker
                         .record_market_data(
                             Some(new_price),
                             false, // This is not a liquidation
-                            Some(self.config.gas_price_multiplier),
+                            current_gas_price,
                         )
                         .await
                     {

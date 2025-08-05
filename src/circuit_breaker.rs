@@ -42,7 +42,7 @@ pub struct MarketDataPoint {
     pub timestamp: Instant,
     pub price: Option<U256>,
     pub liquidation_occurred: bool,
-    pub gas_price_multiplier: Option<u64>,
+    pub gas_price_wei: Option<U256>,
 }
 
 /// Alert for circuit breaker activation
@@ -169,7 +169,7 @@ impl CircuitBreaker {
         &self,
         price: Option<U256>,
         liquidation_occurred: bool,
-        gas_price_multiplier: Option<u64>,
+        gas_price_wei: Option<U256>,
     ) -> Result<()> {
         if !self.config.circuit_breaker_enabled {
             return Ok(());
@@ -179,7 +179,7 @@ impl CircuitBreaker {
             timestamp: Instant::now(),
             price,
             liquidation_occurred,
-            gas_price_multiplier,
+            gas_price_wei,
         };
 
         // Add to history
@@ -409,12 +409,30 @@ impl CircuitBreaker {
             .sum()
     }
 
+    /// Calculate gas multiplier relative to baseline (uses 20 Gwei as baseline)
+    fn calculate_gas_multiplier(&self, gas_price_wei: U256) -> u64 {
+        // Define baseline gas price as 20 Gwei (typical normal gas price)
+        let baseline_gas_price_wei = U256::from(20_000_000_000u64); // 20 Gwei in wei
+
+        // Calculate multiplier: current_gas_price / baseline_gas_price
+        if baseline_gas_price_wei.is_zero() {
+            return 1;
+        }
+
+        // Convert to u128 for division, then back to u64
+        let gas_price_u128 = gas_price_wei.to::<u128>();
+        let baseline_u128 = baseline_gas_price_wei.to::<u128>();
+
+        ((gas_price_u128 / baseline_u128) as u64).max(1)
+    }
+
     /// Get the most recent gas price multiplier
     fn get_current_gas_multiplier(&self, market_data: &VecDeque<MarketDataPoint>) -> Option<u64> {
-        market_data
-            .iter()
-            .rev()
-            .find_map(|point| point.gas_price_multiplier)
+        market_data.iter().rev().find_map(|point| {
+            point
+                .gas_price_wei
+                .map(|price| self.calculate_gas_multiplier(price))
+        })
     }
 
     /// Check if a test liquidation should be allowed in half-open state
@@ -687,11 +705,17 @@ impl CircuitBreaker {
         // Compare gas prices (if available)
         let recent_gas = recent_data
             .iter()
-            .filter_map(|p| p.gas_price_multiplier)
+            .filter_map(|p| {
+                p.gas_price_wei
+                    .map(|price| self.calculate_gas_multiplier(price))
+            })
             .collect::<Vec<_>>();
         let older_gas = older_data
             .iter()
-            .filter_map(|p| p.gas_price_multiplier)
+            .filter_map(|p| {
+                p.gas_price_wei
+                    .map(|price| self.calculate_gas_multiplier(price))
+            })
             .collect::<Vec<_>>();
 
         let gas_improving = if !recent_gas.is_empty() && !older_gas.is_empty() {
@@ -795,6 +819,13 @@ mod tests {
     use std::time::Duration;
     use tokio::time::sleep;
 
+    /// Helper function to convert gas multiplier to gas price in wei for tests
+    fn gas_multiplier_to_wei(multiplier: u64) -> U256 {
+        // Use 20 Gwei as baseline (same as in calculate_gas_multiplier)
+        let baseline_gas_price_wei = U256::from(20_000_000_000u64); // 20 Gwei
+        baseline_gas_price_wei * U256::from(multiplier)
+    }
+
     fn create_test_config() -> BotConfig {
         BotConfig {
             rpc_url: "http://localhost:8545".to_string(),
@@ -855,14 +886,14 @@ mod tests {
         // Record initial price
         let initial_price = U256::from(50000 * 10u128.pow(18)); // $50,000
         circuit_breaker
-            .record_market_data(Some(initial_price), false, Some(2))
+            .record_market_data(Some(initial_price), false, Some(gas_multiplier_to_wei(2)))
             .await
             .unwrap();
 
         // Record volatile price change (10% increase, above 5% threshold)
         let volatile_price = U256::from(55000 * 10u128.pow(18)); // $55,000 (+10%)
         circuit_breaker
-            .record_market_data(Some(volatile_price), false, Some(2))
+            .record_market_data(Some(volatile_price), false, Some(gas_multiplier_to_wei(2)))
             .await
             .unwrap();
 
@@ -886,7 +917,7 @@ mod tests {
         // Record multiple liquidations quickly (above threshold of 3/minute)
         for _ in 0..5 {
             circuit_breaker
-                .record_market_data(None, true, Some(2))
+                .record_market_data(None, true, Some(gas_multiplier_to_wei(2)))
                 .await
                 .unwrap();
             sleep(Duration::from_millis(100)).await;
@@ -908,7 +939,7 @@ mod tests {
 
         // Record high gas price (above threshold of 3x)
         circuit_breaker
-            .record_market_data(None, false, Some(5)) // 5x gas multiplier
+            .record_market_data(None, false, Some(gas_multiplier_to_wei(5))) // 5x gas multiplier
             .await
             .unwrap();
 
@@ -935,7 +966,7 @@ mod tests {
         // Trigger circuit breaker with liquidation flood
         for _ in 0..5 {
             circuit_breaker
-                .record_market_data(None, true, Some(2))
+                .record_market_data(None, true, Some(gas_multiplier_to_wei(2)))
                 .await
                 .unwrap();
         }
@@ -949,16 +980,20 @@ mod tests {
         // Should transition to half-open
         assert_eq!(circuit_breaker.get_state(), CircuitBreakerState::HalfOpen);
 
-        // Record normal conditions
+        // Wait for the monitoring window to expire so liquidation data gets cleaned up
+        // The monitoring window is 60 seconds in the test config
+        sleep(Duration::from_secs(61)).await;
+
+        // Record normal conditions after liquidation data has expired
         circuit_breaker
-            .record_market_data(None, false, Some(2))
+            .record_market_data(None, false, Some(gas_multiplier_to_wei(2)))
             .await
             .unwrap();
 
         // Give it a moment to process
-        sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(200)).await;
 
-        // Should return to closed
+        // Should return to closed after liquidation data has expired from window
         assert_eq!(circuit_breaker.get_state(), CircuitBreakerState::Closed);
     }
 
@@ -970,7 +1005,7 @@ mod tests {
         // Trigger circuit breaker
         for _ in 0..5 {
             circuit_breaker
-                .record_market_data(None, true, Some(2))
+                .record_market_data(None, true, Some(gas_multiplier_to_wei(2)))
                 .await
                 .unwrap();
         }
@@ -1008,7 +1043,7 @@ mod tests {
         // Trigger circuit breaker
         for _ in 0..5 {
             circuit_breaker
-                .record_market_data(None, true, Some(2))
+                .record_market_data(None, true, Some(gas_multiplier_to_wei(2)))
                 .await
                 .unwrap();
         }
@@ -1033,7 +1068,11 @@ mod tests {
         // Record data points
         for i in 0..10 {
             circuit_breaker
-                .record_market_data(Some(U256::from(50000 + i)), false, Some(2))
+                .record_market_data(
+                    Some(U256::from(50000 + i)),
+                    false,
+                    Some(gas_multiplier_to_wei(2)),
+                )
                 .await
                 .unwrap();
             sleep(Duration::from_millis(100)).await;
@@ -1054,14 +1093,14 @@ mod tests {
         // High gas price + liquidation + price volatility
         let initial_price = U256::from(50000 * 10u128.pow(18));
         circuit_breaker
-            .record_market_data(Some(initial_price), false, Some(2))
+            .record_market_data(Some(initial_price), false, Some(gas_multiplier_to_wei(2)))
             .await
             .unwrap();
 
         // Record extreme conditions
         let volatile_price = U256::from(60000 * 10u128.pow(18)); // 20% increase
         circuit_breaker
-            .record_market_data(Some(volatile_price), true, Some(5)) // High gas + liquidation + volatility
+            .record_market_data(Some(volatile_price), true, Some(gas_multiplier_to_wei(5))) // High gas + liquidation + volatility
             .await
             .unwrap();
 
@@ -1088,19 +1127,23 @@ mod tests {
 
         // Small price changes (under threshold)
         circuit_breaker
-            .record_market_data(Some(base_price), false, Some(2))
+            .record_market_data(Some(base_price), false, Some(gas_multiplier_to_wei(2)))
             .await
             .unwrap();
 
         let small_change_price = U256::from(50100 * 10u128.pow(18)); // 0.2% increase
         circuit_breaker
-            .record_market_data(Some(small_change_price), false, Some(2))
+            .record_market_data(
+                Some(small_change_price),
+                false,
+                Some(gas_multiplier_to_wei(2)),
+            )
             .await
             .unwrap();
 
         // Normal liquidation frequency (1 liquidation, under threshold)
         circuit_breaker
-            .record_market_data(None, true, Some(2))
+            .record_market_data(None, true, Some(gas_multiplier_to_wei(2)))
             .await
             .unwrap();
 
@@ -1123,7 +1166,7 @@ mod tests {
         // Trigger circuit breaker
         for _ in 0..5 {
             circuit_breaker
-                .record_market_data(None, true, Some(2))
+                .record_market_data(None, true, Some(gas_multiplier_to_wei(2)))
                 .await
                 .unwrap();
         }

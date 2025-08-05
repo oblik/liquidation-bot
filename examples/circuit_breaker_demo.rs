@@ -4,6 +4,13 @@ use liquidation_bot::config::BotConfig;
 use std::time::Duration;
 use tokio::time::sleep;
 
+/// Helper function to convert gas multiplier to gas price in wei for demo
+fn gas_multiplier_to_wei(multiplier: u64) -> U256 {
+    // Use 20 Gwei as baseline (same as in circuit breaker calculate_gas_multiplier)
+    let baseline_gas_price_wei = U256::from(20_000_000_000u64); // 20 Gwei
+    baseline_gas_price_wei * U256::from(multiplier)
+}
+
 /// Demo configuration for circuit breaker testing
 fn create_demo_config() -> BotConfig {
     BotConfig {
@@ -86,18 +93,18 @@ async fn demo_normal_conditions() -> Result<(), Box<dyn std::error::Error>> {
     // Record normal market data
     let base_price = U256::from(50000 * 10u128.pow(18)); // $50,000
     circuit_breaker
-        .record_market_data(Some(base_price), false, Some(2))
+        .record_market_data(Some(base_price), false, Some(gas_multiplier_to_wei(2)))
         .await?;
 
     // Small price change (under threshold)
     let normal_price = U256::from(50200 * 10u128.pow(18)); // $50,200 (+0.4%)
     circuit_breaker
-        .record_market_data(Some(normal_price), false, Some(2))
+        .record_market_data(Some(normal_price), false, Some(gas_multiplier_to_wei(2)))
         .await?;
 
     // One liquidation (under threshold)
     circuit_breaker
-        .record_market_data(None, true, Some(2))
+        .record_market_data(None, true, Some(gas_multiplier_to_wei(2)))
         .await?;
 
     sleep(Duration::from_millis(100)).await;
@@ -117,7 +124,7 @@ async fn demo_price_volatility() -> Result<(), Box<dyn std::error::Error>> {
     // Record initial price
     let initial_price = U256::from(50000 * 10u128.pow(18)); // $50,000
     circuit_breaker
-        .record_market_data(Some(initial_price), false, Some(2))
+        .record_market_data(Some(initial_price), false, Some(gas_multiplier_to_wei(2)))
         .await?;
 
     println!("Recording extreme price volatility...");
@@ -125,7 +132,7 @@ async fn demo_price_volatility() -> Result<(), Box<dyn std::error::Error>> {
     // Record volatile price change (10% drop, above 5% threshold)
     let crash_price = U256::from(45000 * 10u128.pow(18)); // $45,000 (-10%)
     circuit_breaker
-        .record_market_data(Some(crash_price), false, Some(2))
+        .record_market_data(Some(crash_price), false, Some(gas_multiplier_to_wei(2)))
         .await?;
 
     sleep(Duration::from_millis(200)).await;
@@ -154,7 +161,7 @@ async fn demo_liquidation_flood() -> Result<(), Box<dyn std::error::Error>> {
     for i in 1..=5 {
         println!("  Recording liquidation {}/5", i);
         circuit_breaker
-            .record_market_data(None, true, Some(2))
+            .record_market_data(None, true, Some(gas_multiplier_to_wei(2)))
             .await?;
         sleep(Duration::from_millis(100)).await;
     }
@@ -186,7 +193,7 @@ async fn demo_gas_spike() -> Result<(), Box<dyn std::error::Error>> {
 
     // Record high gas price (5x, above threshold of 3x)
     circuit_breaker
-        .record_market_data(None, false, Some(5))
+        .record_market_data(None, false, Some(gas_multiplier_to_wei(5)))
         .await?;
 
     sleep(Duration::from_millis(200)).await;
@@ -213,7 +220,7 @@ async fn demo_recovery_process() -> Result<(), Box<dyn std::error::Error>> {
     println!("Triggering circuit breaker...");
     for _ in 0..5 {
         circuit_breaker
-            .record_market_data(None, true, Some(2))
+            .record_market_data(None, true, Some(gas_multiplier_to_wei(2)))
             .await?;
     }
 
@@ -234,7 +241,7 @@ async fn demo_recovery_process() -> Result<(), Box<dyn std::error::Error>> {
     // Record normal conditions to trigger recovery
     println!("Recording normal market conditions...");
     circuit_breaker
-        .record_market_data(None, false, Some(2))
+        .record_market_data(None, false, Some(gas_multiplier_to_wei(2)))
         .await?;
 
     sleep(Duration::from_millis(200)).await;
