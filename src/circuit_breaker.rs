@@ -64,6 +64,8 @@ pub struct CircuitBreaker {
     market_data: Arc<RwLock<VecDeque<MarketDataPoint>>>,
     /// Time when circuit breaker was last activated
     last_activation: Arc<RwLock<Option<Instant>>>,
+    /// Time when last test liquidation was allowed in half-open state
+    last_test_liquidation: Arc<RwLock<Option<Instant>>>,
     /// Alert sender for notifications
     alert_tx: mpsc::UnboundedSender<CircuitBreakerAlert>,
     /// Alert receiver for notifications
@@ -142,6 +144,7 @@ impl CircuitBreaker {
             config,
             market_data: Arc::new(RwLock::new(VecDeque::new())),
             last_activation: Arc::new(RwLock::new(None)),
+            last_test_liquidation: Arc::new(RwLock::new(None)),
             alert_tx,
             alert_rx: Arc::new(tokio::sync::Mutex::new(alert_rx)),
             stats: Arc::new(RwLock::new(CircuitBreakerStats::default())),
@@ -417,11 +420,17 @@ impl CircuitBreaker {
     /// Check if a test liquidation should be allowed in half-open state
     fn should_allow_test_liquidation(&self) -> bool {
         // Allow one test liquidation every 30 seconds in half-open state
-        if let Some(last_activation) = *self.last_activation.read() {
-            let time_since_activation = Instant::now().duration_since(last_activation);
-            time_since_activation.as_secs() % 30 == 0
-        } else {
-            false
+        let last_test = *self.last_test_liquidation.read();
+
+        match last_test {
+            Some(last_time) => {
+                // Allow if at least 30 seconds have passed since last test liquidation
+                Instant::now().duration_since(last_time).as_secs() >= 30
+            }
+            None => {
+                // No previous test liquidation, allow the first one
+                true
+            }
         }
     }
 
@@ -489,6 +498,12 @@ impl CircuitBreaker {
     pub fn record_blocked_liquidation(&self) {
         let mut stats = self.stats.write();
         stats.total_liquidations_blocked += 1;
+    }
+
+    /// Record that a test liquidation was allowed in half-open state
+    pub fn record_test_liquidation(&self) {
+        let mut last_test = self.last_test_liquidation.write();
+        *last_test = Some(Instant::now());
     }
 
     /// Get alert receiver for monitoring circuit breaker events
@@ -617,6 +632,7 @@ impl CircuitBreaker {
         {
             let mut state = self.state.write();
             let mut last_activation = self.last_activation.write();
+            let mut last_test_liquidation = self.last_test_liquidation.write();
             let mut market_data = self.market_data.write();
 
             *state = if self.config.circuit_breaker_enabled {
@@ -626,6 +642,7 @@ impl CircuitBreaker {
             };
 
             *last_activation = None;
+            *last_test_liquidation = None;
             market_data.clear();
         }
 
@@ -1096,5 +1113,40 @@ mod tests {
 
         let stats = circuit_breaker.get_stats();
         assert_eq!(stats.total_activations, 0);
+    }
+
+    #[tokio::test]
+    async fn test_half_open_test_liquidation_timing() {
+        let config = create_test_config();
+        let circuit_breaker = CircuitBreaker::new(config);
+
+        // Trigger circuit breaker
+        for _ in 0..5 {
+            circuit_breaker
+                .record_market_data(None, true, Some(2))
+                .await
+                .unwrap();
+        }
+
+        // Wait for half-open transition
+        sleep(Duration::from_secs(6)).await;
+        assert_eq!(circuit_breaker.get_state(), CircuitBreakerState::HalfOpen);
+
+        // First test liquidation should be allowed immediately
+        assert!(circuit_breaker.is_liquidation_allowed());
+
+        // Record that test liquidation occurred
+        circuit_breaker.record_test_liquidation();
+
+        // Immediately after test liquidation, should not be allowed
+        assert!(!circuit_breaker.is_liquidation_allowed());
+
+        // Wait a bit less than 30 seconds, should still not be allowed
+        sleep(Duration::from_secs(10)).await;
+        assert!(!circuit_breaker.is_liquidation_allowed());
+
+        // Wait full 30 seconds since last test liquidation
+        sleep(Duration::from_secs(21)).await; // Total 31 seconds
+        assert!(circuit_breaker.is_liquidation_allowed());
     }
 }

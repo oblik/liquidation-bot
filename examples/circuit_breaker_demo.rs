@@ -1,6 +1,6 @@
+use alloy_primitives::U256;
 use liquidation_bot::circuit_breaker::{CircuitBreaker, CircuitBreakerState};
 use liquidation_bot::config::BotConfig;
-use alloy_primitives::U256;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -9,7 +9,8 @@ fn create_demo_config() -> BotConfig {
     BotConfig {
         rpc_url: "http://localhost:8545".to_string(),
         ws_url: "ws://localhost:8546".to_string(),
-        private_key: "0x0000000000000000000000000000000000000000000000000000000000000001".to_string(),
+        private_key: "0x0000000000000000000000000000000000000000000000000000000000000001"
+            .to_string(),
         liquidator_contract: None,
         min_profit_threshold: U256::from(1000000000000000000u64), // 1 ETH
         gas_price_multiplier: 2,
@@ -25,7 +26,7 @@ fn create_demo_config() -> BotConfig {
         safe_health_factor_threshold: U256::from(10000000000000000000u64), // 10.0
         circuit_breaker_enabled: true,
         max_price_volatility_threshold: 5.0, // 5% for demo
-        max_liquidations_per_minute: 3, // Low threshold for demo
+        max_liquidations_per_minute: 3,      // Low threshold for demo
         circuit_breaker_monitoring_window_secs: 60,
         circuit_breaker_cooldown_secs: 10, // Short cooldown for demo
         min_gas_price_multiplier: 1,
@@ -36,9 +37,7 @@ fn create_demo_config() -> BotConfig {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing for demo
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").init();
 
     println!("🚀 Circuit Breaker Demo Starting...\n");
 
@@ -79,18 +78,27 @@ async fn demo_normal_conditions() -> Result<(), Box<dyn std::error::Error>> {
     let circuit_breaker = CircuitBreaker::new(config);
 
     println!("Initial state: {:?}", circuit_breaker.get_state());
-    println!("Liquidations allowed: {}", circuit_breaker.is_liquidation_allowed());
+    println!(
+        "Liquidations allowed: {}",
+        circuit_breaker.is_liquidation_allowed()
+    );
 
     // Record normal market data
     let base_price = U256::from(50000 * 10u128.pow(18)); // $50,000
-    circuit_breaker.record_market_data(Some(base_price), false, Some(2)).await?;
+    circuit_breaker
+        .record_market_data(Some(base_price), false, Some(2))
+        .await?;
 
     // Small price change (under threshold)
     let normal_price = U256::from(50200 * 10u128.pow(18)); // $50,200 (+0.4%)
-    circuit_breaker.record_market_data(Some(normal_price), false, Some(2)).await?;
+    circuit_breaker
+        .record_market_data(Some(normal_price), false, Some(2))
+        .await?;
 
     // One liquidation (under threshold)
-    circuit_breaker.record_market_data(None, true, Some(2)).await?;
+    circuit_breaker
+        .record_market_data(None, true, Some(2))
+        .await?;
 
     sleep(Duration::from_millis(100)).await;
 
@@ -108,20 +116,24 @@ async fn demo_price_volatility() -> Result<(), Box<dyn std::error::Error>> {
 
     // Record initial price
     let initial_price = U256::from(50000 * 10u128.pow(18)); // $50,000
-    circuit_breaker.record_market_data(Some(initial_price), false, Some(2)).await?;
+    circuit_breaker
+        .record_market_data(Some(initial_price), false, Some(2))
+        .await?;
 
     println!("Recording extreme price volatility...");
-    
+
     // Record volatile price change (10% drop, above 5% threshold)
     let crash_price = U256::from(45000 * 10u128.pow(18)); // $45,000 (-10%)
-    circuit_breaker.record_market_data(Some(crash_price), false, Some(2)).await?;
+    circuit_breaker
+        .record_market_data(Some(crash_price), false, Some(2))
+        .await?;
 
     sleep(Duration::from_millis(200)).await;
 
     println!("After price crash:");
     println!("  State: {:?}", circuit_breaker.get_state());
     println!("  Health Score: {}/100", circuit_breaker.get_health_score());
-    
+
     if circuit_breaker.get_state() == CircuitBreakerState::Open {
         println!("  ✅ Circuit breaker correctly activated due to price volatility!");
     }
@@ -141,7 +153,9 @@ async fn demo_liquidation_flood() -> Result<(), Box<dyn std::error::Error>> {
     // Record multiple liquidations quickly (above threshold of 3/minute)
     for i in 1..=5 {
         println!("  Recording liquidation {}/5", i);
-        circuit_breaker.record_market_data(None, true, Some(2)).await?;
+        circuit_breaker
+            .record_market_data(None, true, Some(2))
+            .await?;
         sleep(Duration::from_millis(100)).await;
     }
 
@@ -150,13 +164,16 @@ async fn demo_liquidation_flood() -> Result<(), Box<dyn std::error::Error>> {
     println!("After liquidation flood:");
     println!("  State: {:?}", circuit_breaker.get_state());
     println!("  Health Score: {}/100", circuit_breaker.get_health_score());
-    
+
     if circuit_breaker.get_state() == CircuitBreakerState::Open {
         println!("  ✅ Circuit breaker correctly activated due to liquidation flood!");
     }
 
     let stats = circuit_breaker.get_stats();
-    println!("  Liquidation flood triggers: {}", stats.liquidation_flood_triggers);
+    println!(
+        "  Liquidation flood triggers: {}",
+        stats.liquidation_flood_triggers
+    );
 
     Ok(())
 }
@@ -168,14 +185,16 @@ async fn demo_gas_spike() -> Result<(), Box<dyn std::error::Error>> {
     println!("Recording gas price spike...");
 
     // Record high gas price (5x, above threshold of 3x)
-    circuit_breaker.record_market_data(None, false, Some(5)).await?;
+    circuit_breaker
+        .record_market_data(None, false, Some(5))
+        .await?;
 
     sleep(Duration::from_millis(200)).await;
 
     println!("After gas spike:");
     println!("  State: {:?}", circuit_breaker.get_state());
     println!("  Health Score: {}/100", circuit_breaker.get_health_score());
-    
+
     if circuit_breaker.get_state() == CircuitBreakerState::Open {
         println!("  ✅ Circuit breaker correctly activated due to gas spike!");
     }
@@ -193,9 +212,11 @@ async fn demo_recovery_process() -> Result<(), Box<dyn std::error::Error>> {
     // First trigger the circuit breaker
     println!("Triggering circuit breaker...");
     for _ in 0..5 {
-        circuit_breaker.record_market_data(None, true, Some(2)).await?;
+        circuit_breaker
+            .record_market_data(None, true, Some(2))
+            .await?;
     }
-    
+
     sleep(Duration::from_millis(100)).await;
     println!("Circuit breaker state: {:?}", circuit_breaker.get_state());
 
@@ -205,26 +226,34 @@ async fn demo_recovery_process() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("After cooldown:");
     println!("  State: {:?}", circuit_breaker.get_state());
-    
+
     if circuit_breaker.get_state() == CircuitBreakerState::HalfOpen {
         println!("  ✅ Successfully transitioned to half-open state!");
     }
 
     // Record normal conditions to trigger recovery
     println!("Recording normal market conditions...");
-    circuit_breaker.record_market_data(None, false, Some(2)).await?;
+    circuit_breaker
+        .record_market_data(None, false, Some(2))
+        .await?;
 
     sleep(Duration::from_millis(200)).await;
 
     println!("After normal conditions:");
     println!("  State: {:?}", circuit_breaker.get_state());
-    
+
     if circuit_breaker.get_state() == CircuitBreakerState::Closed {
         println!("  ✅ Successfully recovered to normal operation!");
     }
 
-    println!("  Conditions improving: {}", circuit_breaker.are_conditions_improving());
-    println!("  Final health score: {}/100", circuit_breaker.get_health_score());
+    println!(
+        "  Conditions improving: {}",
+        circuit_breaker.are_conditions_improving()
+    );
+    println!(
+        "  Final health score: {}/100",
+        circuit_breaker.get_health_score()
+    );
 
     Ok(())
 }
@@ -236,18 +265,24 @@ async fn demo_manual_control() -> Result<(), Box<dyn std::error::Error>> {
     let circuit_breaker = CircuitBreaker::new(config);
 
     println!("Manual Control Demo:");
-    
+
     // Manual disable
     println!("Manually disabling circuit breaker...");
     circuit_breaker.disable().await?;
     println!("  State: {:?}", circuit_breaker.get_state());
-    println!("  Liquidations allowed: {}", circuit_breaker.is_liquidation_allowed());
+    println!(
+        "  Liquidations allowed: {}",
+        circuit_breaker.is_liquidation_allowed()
+    );
 
     // Manual enable
     println!("Manually enabling circuit breaker...");
     circuit_breaker.enable().await?;
     println!("  State: {:?}", circuit_breaker.get_state());
-    println!("  Liquidations allowed: {}", circuit_breaker.is_liquidation_allowed());
+    println!(
+        "  Liquidations allowed: {}",
+        circuit_breaker.is_liquidation_allowed()
+    );
 
     // Reset
     println!("Resetting circuit breaker...");
@@ -261,19 +296,43 @@ async fn demo_manual_control() -> Result<(), Box<dyn std::error::Error>> {
 #[allow(dead_code)]
 fn demo_status_monitoring(circuit_breaker: &CircuitBreaker) {
     println!("Status Monitoring Demo:");
-    
+
     let report = circuit_breaker.get_status_report();
     println!("Full Status Report:");
     println!("  State: {:?}", report.state);
     println!("  Total Activations: {}", report.stats.total_activations);
-    println!("  Liquidations Blocked: {}", report.stats.total_liquidations_blocked);
-    println!("  Current Volatility: {:?}%", report.current_conditions.current_volatility_percent);
-    println!("  Liquidations/min: {}", report.current_conditions.current_liquidations_per_minute);
-    println!("  Gas Multiplier: {:?}x", report.current_conditions.current_gas_multiplier);
-    println!("  Data Points: {}", report.current_conditions.data_points_count);
-    
+    println!(
+        "  Liquidations Blocked: {}",
+        report.stats.total_liquidations_blocked
+    );
+    println!(
+        "  Current Volatility: {:?}%",
+        report.current_conditions.current_volatility_percent
+    );
+    println!(
+        "  Liquidations/min: {}",
+        report.current_conditions.current_liquidations_per_minute
+    );
+    println!(
+        "  Gas Multiplier: {:?}x",
+        report.current_conditions.current_gas_multiplier
+    );
+    println!(
+        "  Data Points: {}",
+        report.current_conditions.data_points_count
+    );
+
     println!("Thresholds:");
-    println!("  Max Volatility: {}%", report.thresholds.max_price_volatility_threshold);
-    println!("  Max Liquidations/min: {}", report.thresholds.max_liquidations_per_minute);
-    println!("  Max Gas Multiplier: {}x", report.thresholds.max_gas_price_multiplier);
+    println!(
+        "  Max Volatility: {}%",
+        report.thresholds.max_price_volatility_threshold
+    );
+    println!(
+        "  Max Liquidations/min: {}",
+        report.thresholds.max_liquidations_per_minute
+    );
+    println!(
+        "  Max Gas Multiplier: {}x",
+        report.thresholds.max_gas_price_multiplier
+    );
 }
