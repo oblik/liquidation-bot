@@ -208,6 +208,18 @@ impl CircuitBreaker {
     }
 
     /// Record a new market data point and check for extreme conditions (backward compatibility)
+    ///
+    /// WARNING: This method has a critical limitation - it cannot properly track failed liquidation
+    /// attempts. When liquidation_occurred is false, the method cannot distinguish between:
+    /// - A failed liquidation attempt (should be counted for circuit breaker monitoring)
+    /// - Regular market data with no liquidation (should not be counted)
+    ///
+    /// This can cause the circuit breaker to miss liquidation floods consisting of failed attempts.
+    ///
+    /// For accurate liquidation tracking, use record_liquidation_attempt() instead.
+    #[deprecated(
+        note = "Use record_liquidation_attempt() for liquidation tracking, this method cannot properly track failed attempts"
+    )]
     pub async fn record_market_data(
         &self,
         price: Option<U256>,
@@ -222,7 +234,11 @@ impl CircuitBreaker {
             timestamp: Instant::now(),
             price,
             liquidation_occurred,
-            liquidation_attempted: liquidation_occurred, // For backward compatibility
+            liquidation_attempted: liquidation_occurred, // IMPORTANT: This is a limitation for backward compatibility
+            // When liquidation_occurred is false, we cannot distinguish between
+            // failed liquidation attempts and regular market data updates.
+            // This can cause the circuit breaker to miss liquidation floods.
+            // Use record_liquidation_attempt() for accurate liquidation tracking.
             gas_price_wei,
         };
 
