@@ -268,17 +268,32 @@ where
                 }
                 BotEvent::LiquidationOpportunity(user) => {
                     // Check circuit breaker before processing liquidation
-                    let circuit_breaker_state = self.circuit_breaker.get_state();
+                    // IMPORTANT: Capture state BEFORE liquidation to avoid TOCTOU bug
+                    let circuit_breaker_state_before = self.circuit_breaker.get_state();
+
                     if !self.circuit_breaker.is_liquidation_allowed() {
                         warn!(
                             "🚫 Liquidation blocked by circuit breaker (state: {:?}) for user: {:?}",
-                            circuit_breaker_state, user
+                            circuit_breaker_state_before, user
                         );
                         self.circuit_breaker.record_blocked_liquidation();
+
+                        // Record the blocked attempt for frequency monitoring
+                        if let Err(e) = self
+                            .circuit_breaker
+                            .record_liquidation_attempt(false, None)
+                            .await
+                        {
+                            warn!("Failed to record blocked liquidation attempt: {}", e);
+                        }
                         continue;
                     }
 
                     info!("🎯 Processing liquidation opportunity for user: {:?}", user);
+
+                    // Determine if this is a test liquidation based on state BEFORE execution
+                    let is_test_liquidation = circuit_breaker_state_before
+                        == crate::circuit_breaker::CircuitBreakerState::HalfOpen;
 
                     // Get current gas price for circuit breaker monitoring
                     let current_gas_price = match self.provider.get_gas_price().await {
@@ -323,29 +338,23 @@ where
                         }
                     }
 
-                    // Record liquidation attempt AFTER execution with actual outcome
+                    // Record ALL liquidation attempts (both successful and failed) for frequency monitoring
                     if let Err(e) = self
                         .circuit_breaker
-                        .record_market_data(
-                            None,                  // Price will be updated separately via price feed updates
-                            liquidation_succeeded, // Only record if liquidation actually succeeded
-                            current_gas_price,
-                        )
+                        .record_liquidation_attempt(liquidation_succeeded, current_gas_price)
                         .await
                     {
-                        warn!("Failed to record market data for circuit breaker: {}", e);
+                        warn!(
+                            "Failed to record liquidation attempt for circuit breaker: {}",
+                            e
+                        );
                     }
 
-                    // Re-check circuit breaker state before recording test liquidation to avoid TOCTOU bug
-                    // The state could have changed during the async liquidation operation
-                    let current_circuit_breaker_state = self.circuit_breaker.get_state();
-                    if current_circuit_breaker_state
-                        == crate::circuit_breaker::CircuitBreakerState::HalfOpen
-                        && liquidation_succeeded
-                    {
+                    // Record test liquidation if this was a half-open state test (determined before execution)
+                    if is_test_liquidation && liquidation_succeeded {
                         self.circuit_breaker.record_test_liquidation();
                         info!(
-                            "📊 Recorded test liquidation in half-open state for user: {:?}",
+                            "📊 Recorded successful test liquidation (state was half-open before attempt) for user: {:?}",
                             user
                         );
                     }

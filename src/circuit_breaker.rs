@@ -41,7 +41,8 @@ pub enum MarketCondition {
 pub struct MarketDataPoint {
     pub timestamp: Instant,
     pub price: Option<U256>,
-    pub liquidation_occurred: bool,
+    pub liquidation_occurred: bool,  // Successful liquidation
+    pub liquidation_attempted: bool, // Any liquidation attempt (successful or failed)
     pub gas_price_wei: Option<U256>,
 }
 
@@ -111,7 +112,8 @@ pub struct CircuitBreakerThresholds {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CurrentMarketConditions {
     pub current_volatility_percent: Option<f64>,
-    pub current_liquidations_per_minute: u64,
+    pub current_liquidations_per_minute: u64, // Total attempts (successful + failed)
+    pub current_successful_liquidations_per_minute: u64, // Only successful liquidations
     pub current_gas_multiplier: Option<u64>,
     pub data_points_count: usize,
 }
@@ -164,7 +166,48 @@ impl CircuitBreaker {
         }
     }
 
-    /// Record a new market data point and check for extreme conditions
+    /// Record a liquidation attempt (successful or failed) for frequency monitoring
+    pub async fn record_liquidation_attempt(
+        &self,
+        liquidation_succeeded: bool,
+        gas_price_wei: Option<U256>,
+    ) -> Result<()> {
+        if !self.config.circuit_breaker_enabled {
+            return Ok(());
+        }
+
+        let data_point = MarketDataPoint {
+            timestamp: Instant::now(),
+            price: None, // Price updates are handled separately
+            liquidation_occurred: liquidation_succeeded,
+            liquidation_attempted: true, // Always true for any attempt
+            gas_price_wei,
+        };
+
+        // Add to history
+        {
+            let mut market_data = self.market_data.write();
+            market_data.push_back(data_point.clone());
+
+            // Keep only data within monitoring window
+            let cutoff_time = Instant::now()
+                - Duration::from_secs(self.config.circuit_breaker_monitoring_window_secs);
+            while let Some(front) = market_data.front() {
+                if front.timestamp < cutoff_time {
+                    market_data.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Check for extreme conditions
+        self.check_extreme_conditions().await?;
+
+        Ok(())
+    }
+
+    /// Record a new market data point and check for extreme conditions (backward compatibility)
     pub async fn record_market_data(
         &self,
         price: Option<U256>,
@@ -179,6 +222,7 @@ impl CircuitBreaker {
             timestamp: Instant::now(),
             price,
             liquidation_occurred,
+            liquidation_attempted: liquidation_occurred, // For backward compatibility
             gas_price_wei,
         };
 
@@ -426,8 +470,16 @@ impl CircuitBreaker {
         Some(max_volatility)
     }
 
-    /// Count liquidations in the monitoring window
+    /// Count ALL liquidation attempts (successful and failed) in the monitoring window
     fn count_recent_liquidations(&self, market_data: &VecDeque<MarketDataPoint>) -> u64 {
+        market_data
+            .iter()
+            .map(|point| if point.liquidation_attempted { 1 } else { 0 })
+            .sum()
+    }
+
+    /// Count only successful liquidations in the monitoring window
+    fn count_successful_liquidations(&self, market_data: &VecDeque<MarketDataPoint>) -> u64 {
         market_data
             .iter()
             .map(|point| if point.liquidation_occurred { 1 } else { 0 })
@@ -655,18 +707,30 @@ impl CircuitBreaker {
         market_data: &VecDeque<MarketDataPoint>,
     ) -> CurrentMarketConditions {
         let current_volatility_percent = self.calculate_price_volatility(market_data);
+
+        // Count total attempts (successful + failed)
         let current_liquidations_per_minute = {
             let liquidation_count = self.count_recent_liquidations(market_data);
             (liquidation_count as f64 * 60.0
                 / self.config.circuit_breaker_monitoring_window_secs as f64)
                 .round() as u64
         };
+
+        // Count only successful liquidations
+        let current_successful_liquidations_per_minute = {
+            let successful_count = self.count_successful_liquidations(market_data);
+            (successful_count as f64 * 60.0
+                / self.config.circuit_breaker_monitoring_window_secs as f64)
+                .round() as u64
+        };
+
         let current_gas_multiplier = self.get_current_gas_multiplier(market_data);
         let data_points_count = market_data.len();
 
         CurrentMarketConditions {
             current_volatility_percent,
             current_liquidations_per_minute,
+            current_successful_liquidations_per_minute,
             current_gas_multiplier,
             data_points_count,
         }
@@ -820,11 +884,18 @@ impl CircuitBreaker {
         }
 
         info!(
-            "   Liquidations/min: {} (max: {})",
+            "   Total Liquidation Attempts/min: {} (max: {})",
             status_report
                 .current_conditions
                 .current_liquidations_per_minute,
             status_report.thresholds.max_liquidations_per_minute
+        );
+
+        info!(
+            "   Successful Liquidations/min: {}",
+            status_report
+                .current_conditions
+                .current_successful_liquidations_per_minute
         );
 
         if let Some(gas) = status_report.current_conditions.current_gas_multiplier {
