@@ -390,15 +390,26 @@ impl CircuitBreaker {
             return None;
         }
 
-        let first_price = prices.first()?;
-        let last_price = prices.last()?;
+        // Calculate volatility using all prices, not just first and last
+        // This prevents missing price spikes that occur and recover within the window
+        let mut max_volatility = 0.0;
 
-        if *first_price == 0.0 {
+        // Use the first price as the baseline for volatility calculation
+        let baseline_price = prices.first()?;
+
+        // Use epsilon comparison for floating-point safety
+        const EPSILON: f64 = 1e-10;
+        if baseline_price.abs() < EPSILON {
             return None;
         }
 
-        let volatility = ((last_price - first_price) / first_price).abs() * 100.0;
-        Some(volatility)
+        // Calculate maximum volatility against the baseline price for all subsequent prices
+        for price in &prices[1..] {
+            let volatility = ((price - baseline_price) / baseline_price).abs() * 100.0;
+            max_volatility = f64::max(max_volatility, volatility);
+        }
+
+        Some(max_volatility)
     }
 
     /// Count liquidations in the monitoring window

@@ -336,8 +336,10 @@ where
                         warn!("Failed to record market data for circuit breaker: {}", e);
                     }
 
-                    // If we're in half-open state and liquidation succeeded, record test liquidation
-                    if circuit_breaker_state
+                    // Re-check circuit breaker state before recording test liquidation to avoid TOCTOU bug
+                    // The state could have changed during the async liquidation operation
+                    let current_circuit_breaker_state = self.circuit_breaker.get_state();
+                    if current_circuit_breaker_state
                         == crate::circuit_breaker::CircuitBreakerState::HalfOpen
                         && liquidation_succeeded
                     {
