@@ -167,6 +167,22 @@ impl CircuitBreaker {
     }
 
     /// Record a liquidation attempt (successful or failed) for frequency monitoring
+    /// 
+    /// This is the preferred method for tracking liquidation attempts as it correctly
+    /// distinguishes between successful and failed attempts.
+    /// 
+    /// # Arguments
+    /// * `liquidation_succeeded` - Whether the liquidation was successful
+    /// * `gas_price_wei` - Current gas price in wei (optional)
+    /// 
+    /// # Example
+    /// ```rust
+    /// // Record a failed liquidation attempt
+    /// circuit_breaker.record_liquidation_attempt(false, Some(gas_price)).await?;
+    /// 
+    /// // Record a successful liquidation
+    /// circuit_breaker.record_liquidation_attempt(true, Some(gas_price)).await?;
+    /// ```
     pub async fn record_liquidation_attempt(
         &self,
         liquidation_succeeded: bool,
@@ -207,18 +223,79 @@ impl CircuitBreaker {
         Ok(())
     }
 
-    /// Record a new market data point and check for extreme conditions (backward compatibility)
-    ///
-    /// WARNING: This method has a critical limitation - it cannot properly track failed liquidation
-    /// attempts. When liquidation_occurred is false, the method cannot distinguish between:
-    /// - A failed liquidation attempt (should be counted for circuit breaker monitoring)
-    /// - Regular market data with no liquidation (should not be counted)
-    ///
-    /// This can cause the circuit breaker to miss liquidation floods consisting of failed attempts.
-    ///
-    /// For accurate liquidation tracking, use record_liquidation_attempt() instead.
+    /// Record price updates and non-liquidation market data
+    /// 
+    /// This method should be used for recording price changes and gas price updates
+    /// that are NOT related to liquidation attempts.
+    /// 
+    /// # Arguments
+    /// * `price` - Current asset price (optional)
+    /// * `gas_price_wei` - Current gas price in wei (optional)
+    /// 
+    /// # Example
+    /// ```rust
+    /// // Record a price update from oracle
+    /// circuit_breaker.record_price_update(Some(new_price), Some(gas_price)).await?;
+    /// ```
+    pub async fn record_price_update(
+        &self,
+        price: Option<U256>,
+        gas_price_wei: Option<U256>,
+    ) -> Result<()> {
+        if !self.config.circuit_breaker_enabled {
+            return Ok(());
+        }
+
+        let data_point = MarketDataPoint {
+            timestamp: Instant::now(),
+            price,
+            liquidation_occurred: false,
+            liquidation_attempted: false, // No liquidation attempt for price updates
+            gas_price_wei,
+        };
+
+        // Add to history
+        {
+            let mut market_data = self.market_data.write();
+            market_data.push_back(data_point.clone());
+
+            // Keep only data within monitoring window
+            let cutoff_time = Instant::now()
+                - Duration::from_secs(self.config.circuit_breaker_monitoring_window_secs);
+            while let Some(front) = market_data.front() {
+                if front.timestamp < cutoff_time {
+                    market_data.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // Check for extreme conditions
+        self.check_extreme_conditions().await?;
+
+        Ok(())
+    }
+
+    /// ⚠️ DEPRECATED: Use `record_liquidation_attempt()` or `record_price_update()` instead
+    /// 
+    /// **CRITICAL BUG**: This method has a fundamental design flaw that prevents it from
+    /// correctly tracking failed liquidation attempts. When `liquidation_occurred` is false,
+    /// the method cannot distinguish between:
+    /// 1. A failed liquidation attempt (should count as an attempt)
+    /// 2. A regular market data update with no liquidation (should not count)
+    /// 
+    /// This causes the circuit breaker to **miss liquidation floods** when many liquidations
+    /// fail due to network congestion, gas spikes, or other issues.
+    /// 
+    /// **Migration Guide**:
+    /// - For liquidation tracking: Use `record_liquidation_attempt(success, gas_price)`
+    /// - For price updates: Use `record_price_update(price, gas_price)`
+    /// 
+    /// This method is maintained only for backward compatibility and will be removed in v2.0.
     #[deprecated(
-        note = "Use record_liquidation_attempt() for liquidation tracking, this method cannot properly track failed attempts"
+        since = "1.1.0",
+        note = "Use record_liquidation_attempt() for liquidation tracking or record_price_update() for market data. This method cannot properly track failed liquidation attempts."
     )]
     pub async fn record_market_data(
         &self,
@@ -234,11 +311,15 @@ impl CircuitBreaker {
             timestamp: Instant::now(),
             price,
             liquidation_occurred,
-            liquidation_attempted: liquidation_occurred, // IMPORTANT: This is a limitation for backward compatibility
+            liquidation_attempted: liquidation_occurred, // ⚠️ CRITICAL BUG: This is incorrect!
             // When liquidation_occurred is false, we cannot distinguish between
             // failed liquidation attempts and regular market data updates.
-            // This can cause the circuit breaker to miss liquidation floods.
-            // Use record_liquidation_attempt() for accurate liquidation tracking.
+            // This causes the circuit breaker to miss liquidation floods when
+            // liquidations fail due to network issues.
+            // 
+            // CORRECT USAGE:
+            // - Use record_liquidation_attempt() for ANY liquidation attempt
+            // - Use record_price_update() for pure market data updates
             gas_price_wei,
         };
 
@@ -1067,6 +1148,163 @@ mod tests {
         let stats = circuit_breaker.get_stats();
         assert_eq!(stats.total_activations, 1);
         assert_eq!(stats.gas_spike_triggers, 1);
+    }
+
+    #[tokio::test]
+    async fn test_failed_liquidation_tracking_with_new_method() {
+        let config = create_test_config();
+        let circuit_breaker = CircuitBreaker::new(config);
+
+        // Record multiple FAILED liquidation attempts using the new method
+        // This should trigger the circuit breaker as it correctly tracks failed attempts
+        for _ in 0..5 {
+            circuit_breaker
+                .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2)))
+                .await
+                .unwrap();
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        // Circuit breaker SHOULD be triggered because we had 5 liquidation attempts
+        // (even though all failed) which exceeds the threshold of 3/minute
+        assert_eq!(circuit_breaker.get_state(), CircuitBreakerState::Open);
+        assert!(!circuit_breaker.is_liquidation_allowed());
+
+        let stats = circuit_breaker.get_stats();
+        assert_eq!(stats.total_activations, 1);
+        assert_eq!(stats.liquidation_flood_triggers, 1);
+    }
+
+    #[tokio::test]
+    async fn test_failed_liquidation_bug_with_old_method() {
+        let config = create_test_config();
+        let circuit_breaker = CircuitBreaker::new(config);
+
+        // Record multiple FAILED liquidation attempts using the OLD deprecated method
+        // This demonstrates the BUG: failed attempts are NOT counted
+        for _ in 0..5 {
+            #[allow(deprecated)]
+            circuit_breaker
+                .record_market_data(None, false, Some(gas_multiplier_to_wei(2))) // false = failed liquidation
+                .await
+                .unwrap();
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        // Circuit breaker should NOT be triggered (this is the BUG!)
+        // Because record_market_data treats liquidation_occurred=false as no attempt
+        assert_eq!(circuit_breaker.get_state(), CircuitBreakerState::Closed);
+        assert!(circuit_breaker.is_liquidation_allowed());
+
+        // Verify that no liquidation flood was detected (this confirms the bug)
+        let stats = circuit_breaker.get_stats();
+        assert_eq!(stats.total_activations, 0);
+        assert_eq!(stats.liquidation_flood_triggers, 0);
+    }
+
+    #[tokio::test]
+    async fn test_mixed_successful_and_failed_liquidations() {
+        let config = create_test_config();
+        let circuit_breaker = CircuitBreaker::new(config);
+
+        // Record a mix of successful and failed liquidation attempts
+        // Total: 5 attempts (2 successful, 3 failed) should trigger circuit breaker
+        circuit_breaker
+            .record_liquidation_attempt(true, Some(gas_multiplier_to_wei(2))) // Success
+            .await
+            .unwrap();
+        sleep(Duration::from_millis(100)).await;
+        
+        circuit_breaker
+            .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
+            .await
+            .unwrap();
+        sleep(Duration::from_millis(100)).await;
+        
+        circuit_breaker
+            .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
+            .await
+            .unwrap();
+        sleep(Duration::from_millis(100)).await;
+        
+        circuit_breaker
+            .record_liquidation_attempt(true, Some(gas_multiplier_to_wei(2))) // Success
+            .await
+            .unwrap();
+        sleep(Duration::from_millis(100)).await;
+        
+        circuit_breaker
+            .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
+            .await
+            .unwrap();
+        sleep(Duration::from_millis(100)).await;
+
+        // Circuit breaker should be triggered (5 attempts > 3/minute threshold)
+        assert_eq!(circuit_breaker.get_state(), CircuitBreakerState::Open);
+        assert!(!circuit_breaker.is_liquidation_allowed());
+
+        let stats = circuit_breaker.get_stats();
+        assert_eq!(stats.total_activations, 1);
+        assert_eq!(stats.liquidation_flood_triggers, 1);
+    }
+
+    #[tokio::test]
+    async fn test_price_updates_dont_count_as_liquidations() {
+        let config = create_test_config();
+        let circuit_breaker = CircuitBreaker::new(config);
+
+        // Record multiple price updates using the new dedicated method
+        // These should NOT count as liquidation attempts
+        for i in 0..10 {
+            let price = U256::from((50000 + i * 100) * 10u128.pow(18));
+            circuit_breaker
+                .record_price_update(Some(price), Some(gas_multiplier_to_wei(2)))
+                .await
+                .unwrap();
+            sleep(Duration::from_millis(50)).await;
+        }
+
+        // Circuit breaker should NOT be triggered (no liquidation attempts)
+        assert_eq!(circuit_breaker.get_state(), CircuitBreakerState::Closed);
+        assert!(circuit_breaker.is_liquidation_allowed());
+
+        let stats = circuit_breaker.get_stats();
+        assert_eq!(stats.total_activations, 0);
+        assert_eq!(stats.liquidation_flood_triggers, 0);
+    }
+
+    #[tokio::test]
+    async fn test_correct_liquidation_counting_in_status_report() {
+        let config = create_test_config();
+        let circuit_breaker = CircuitBreaker::new(config);
+
+        // Record a mix of attempts
+        circuit_breaker
+            .record_liquidation_attempt(true, Some(gas_multiplier_to_wei(2))) // Success
+            .await
+            .unwrap();
+        circuit_breaker
+            .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
+            .await
+            .unwrap();
+        circuit_breaker
+            .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
+            .await
+            .unwrap();
+
+        let status_report = circuit_breaker.get_status_report();
+        
+        // Should count 3 total attempts (1 successful + 2 failed)
+        assert_eq!(
+            status_report.current_conditions.current_liquidations_per_minute,
+            3
+        );
+        
+        // Should count only 1 successful liquidation
+        assert_eq!(
+            status_report.current_conditions.current_successful_liquidations_per_minute,
+            1
+        );
     }
 
     #[tokio::test]

@@ -386,9 +386,8 @@ where
 
                     if let Err(e) = self
                         .circuit_breaker
-                        .record_market_data(
+                        .record_price_update(
                             Some(new_price),
-                            false, // This is not a liquidation
                             current_gas_price,
                         )
                         .await
