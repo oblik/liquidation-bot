@@ -376,6 +376,9 @@ where
                     debug!("Oracle price changed for asset: {:?}", asset);
 
                     // Record price change for circuit breaker monitoring with current gas price
+                    // NOTE: Using deprecated record_market_data here is acceptable since this is 
+                    // pure price tracking, not liquidation attempt tracking. This does not affect
+                    // the circuit breaker's ability to detect liquidation floods.
                     let current_gas_price = match self.provider.get_gas_price().await {
                         Ok(price) => Some(alloy_primitives::U256::from(price)),
                         Err(e) => {
@@ -384,6 +387,7 @@ where
                         }
                     };
 
+                    #[allow(deprecated)]
                     if let Err(e) = self
                         .circuit_breaker
                         .record_market_data(

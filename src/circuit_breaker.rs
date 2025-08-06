@@ -1306,4 +1306,139 @@ mod tests {
         sleep(Duration::from_secs(21)).await; // Total 31 seconds
         assert!(circuit_breaker.is_liquidation_allowed());
     }
+
+    #[tokio::test]
+    async fn test_failed_liquidation_attempts_tracking() {
+        let config = create_test_config();
+        let circuit_breaker = CircuitBreaker::new(config);
+
+        // Record multiple failed liquidation attempts using record_liquidation_attempt
+        for i in 0..5 {
+            circuit_breaker
+                .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed attempts
+                .await
+                .unwrap();
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        // Circuit breaker should be triggered by failed liquidation flood
+        assert_eq!(circuit_breaker.get_state(), CircuitBreakerState::Open);
+        assert!(!circuit_breaker.is_liquidation_allowed());
+
+        let stats = circuit_breaker.get_stats();
+        assert_eq!(stats.total_activations, 1);
+        assert_eq!(stats.liquidation_flood_triggers, 1);
+
+        // Verify status report shows correct counts
+        let status_report = circuit_breaker.get_status_report();
+        assert!(status_report.current_conditions.current_liquidations_per_minute >= 3);
+        assert_eq!(status_report.current_conditions.current_successful_liquidations_per_minute, 0);
+    }
+
+    #[tokio::test]
+    async fn test_mixed_successful_and_failed_liquidations() {
+        let config = create_test_config();
+        let circuit_breaker = CircuitBreaker::new(config);
+
+        // Record mix of successful and failed liquidation attempts
+        circuit_breaker
+            .record_liquidation_attempt(true, Some(gas_multiplier_to_wei(2))) // Success
+            .await
+            .unwrap();
+        circuit_breaker
+            .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
+            .await
+            .unwrap();
+        circuit_breaker
+            .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
+            .await
+            .unwrap();
+        circuit_breaker
+            .record_liquidation_attempt(true, Some(gas_multiplier_to_wei(2))) // Success
+            .await
+            .unwrap();
+        circuit_breaker
+            .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
+            .await
+            .unwrap();
+
+        sleep(Duration::from_millis(100)).await;
+
+        // Should trigger due to total attempts (5) being above threshold (3)
+        assert_eq!(circuit_breaker.get_state(), CircuitBreakerState::Open);
+
+        let status_report = circuit_breaker.get_status_report();
+        // Should count all 5 attempts
+        assert!(status_report.current_conditions.current_liquidations_per_minute >= 3);
+        // Should count only 2 successful liquidations
+        assert_eq!(status_report.current_conditions.current_successful_liquidations_per_minute, 2);
+    }
+
+    #[tokio::test]
+    async fn test_record_market_data_limitation_vs_record_liquidation_attempt() {
+        let config = create_test_config();
+        let circuit_breaker_old = CircuitBreaker::new(config.clone());
+        let circuit_breaker_new = CircuitBreaker::new(config);
+
+        // Test old method (record_market_data) - should NOT trigger for failed liquidations
+        for _ in 0..5 {
+            circuit_breaker_old
+                .record_market_data(None, false, Some(gas_multiplier_to_wei(2))) // Failed liquidation appears as false
+                .await
+                .unwrap();
+        }
+
+        sleep(Duration::from_millis(100)).await;
+
+        // Old method should NOT trigger circuit breaker for failed liquidations
+        assert_eq!(circuit_breaker_old.get_state(), CircuitBreakerState::Closed);
+
+        // Test new method (record_liquidation_attempt) - SHOULD trigger for failed liquidations
+        for _ in 0..5 {
+            circuit_breaker_new
+                .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Explicit failed attempt
+                .await
+                .unwrap();
+        }
+
+        sleep(Duration::from_millis(100)).await;
+
+        // New method should trigger circuit breaker for failed liquidations
+        assert_eq!(circuit_breaker_new.get_state(), CircuitBreakerState::Open);
+
+        // Verify the limitation is documented in the status reports
+        let old_report = circuit_breaker_old.get_status_report();
+        let new_report = circuit_breaker_new.get_status_report();
+
+        // Old method misses failed attempts
+        assert_eq!(old_report.current_conditions.current_liquidations_per_minute, 0);
+        // New method correctly counts failed attempts
+        assert!(new_report.current_conditions.current_liquidations_per_minute >= 3);
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_backward_compatibility() {
+        let config = create_test_config();
+        let circuit_breaker = CircuitBreaker::new(config);
+
+        // Test that record_market_data still works for successful liquidations
+        for _ in 0..5 {
+            circuit_breaker
+                .record_market_data(None, true, Some(gas_multiplier_to_wei(2))) // Successful liquidation
+                .await
+                .unwrap();
+        }
+
+        sleep(Duration::from_millis(100)).await;
+
+        // Should still trigger for successful liquidations
+        assert_eq!(circuit_breaker.get_state(), CircuitBreakerState::Open);
+
+        let stats = circuit_breaker.get_stats();
+        assert_eq!(stats.liquidation_flood_triggers, 1);
+
+        let status_report = circuit_breaker.get_status_report();
+        assert!(status_report.current_conditions.current_liquidations_per_minute >= 3);
+        assert!(status_report.current_conditions.current_successful_liquidations_per_minute >= 3);
+    }
 }
