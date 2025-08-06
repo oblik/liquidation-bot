@@ -207,49 +207,63 @@ impl CircuitBreaker {
 
     /// Check for extreme market conditions and activate circuit breaker if needed
     async fn check_extreme_conditions(&self) -> Result<()> {
-        let market_data = self.market_data.read();
-        let state = self.state.read().clone();
+        // Collect all data and perform checks within a scope to release locks before await
+        let triggered_conditions = {
+            let market_data = self.market_data.read();
 
-        // Skip checks if already open
-        if state == CircuitBreakerState::Open {
-            return Ok(());
-        }
+            // Check current state first to skip if already open
+            {
+                let state = self.state.read();
+                if *state == CircuitBreakerState::Open {
+                    return Ok(());
+                }
+            }
 
-        let mut triggered_conditions = Vec::new();
+            let mut triggered_conditions = Vec::new();
 
-        // Check price volatility
-        if let Some(volatility) = self.calculate_price_volatility(&market_data) {
-            if volatility > self.config.max_price_volatility_threshold {
-                triggered_conditions.push(MarketCondition::ExtremeVolatility {
-                    volatility_percent: volatility,
+            // Check price volatility
+            if let Some(volatility) = self.calculate_price_volatility(&market_data) {
+                if volatility > self.config.max_price_volatility_threshold {
+                    triggered_conditions.push(MarketCondition::ExtremeVolatility {
+                        volatility_percent: volatility,
+                    });
+                }
+            }
+
+            // Check liquidation frequency with floating-point precision
+            let liquidation_count = self.count_recent_liquidations(&market_data);
+            let liquidations_per_minute = (liquidation_count as f64 * 60.0
+                / self.config.circuit_breaker_monitoring_window_secs as f64)
+                .round() as u64;
+
+            if liquidations_per_minute > self.config.max_liquidations_per_minute {
+                triggered_conditions.push(MarketCondition::LiquidationFlood {
+                    liquidations_per_minute,
                 });
             }
-        }
 
-        // Check liquidation frequency
-        let liquidation_count = self.count_recent_liquidations(&market_data);
-        let liquidations_per_minute =
-            liquidation_count * 60 / self.config.circuit_breaker_monitoring_window_secs;
-
-        if liquidations_per_minute > self.config.max_liquidations_per_minute {
-            triggered_conditions.push(MarketCondition::LiquidationFlood {
-                liquidations_per_minute,
-            });
-        }
-
-        // Check gas price conditions
-        if let Some(current_gas_multiplier) = self.get_current_gas_multiplier(&market_data) {
-            if current_gas_multiplier > self.config.max_gas_price_multiplier {
-                triggered_conditions.push(MarketCondition::GasPriceSpike {
-                    gas_multiplier: current_gas_multiplier,
-                });
+            // Check gas price conditions
+            if let Some(current_gas_multiplier) = self.get_current_gas_multiplier(&market_data) {
+                if current_gas_multiplier > self.config.max_gas_price_multiplier {
+                    triggered_conditions.push(MarketCondition::GasPriceSpike {
+                        gas_multiplier: current_gas_multiplier,
+                    });
+                }
             }
-        }
+
+            triggered_conditions
+        }; // market_data lock is released here
+
+        // Re-check state before making transition decisions to avoid race conditions
+        let current_state = self.state.read().clone();
 
         // Activate circuit breaker if conditions are met
         if !triggered_conditions.is_empty() {
-            self.activate_circuit_breaker(triggered_conditions).await?;
-        } else if state == CircuitBreakerState::HalfOpen {
+            // Only activate if not already open (double-check to prevent race)
+            if current_state != CircuitBreakerState::Open {
+                self.activate_circuit_breaker(triggered_conditions).await?;
+            }
+        } else if current_state == CircuitBreakerState::HalfOpen {
             // Conditions look good, transition back to closed
             self.close_circuit_breaker().await?;
         }
@@ -643,7 +657,9 @@ impl CircuitBreaker {
         let current_volatility_percent = self.calculate_price_volatility(market_data);
         let current_liquidations_per_minute = {
             let liquidation_count = self.count_recent_liquidations(market_data);
-            liquidation_count * 60 / self.config.circuit_breaker_monitoring_window_secs
+            (liquidation_count as f64 * 60.0
+                / self.config.circuit_breaker_monitoring_window_secs as f64)
+                .round() as u64
         };
         let current_gas_multiplier = self.get_current_gas_multiplier(market_data);
         let data_points_count = market_data.len();
