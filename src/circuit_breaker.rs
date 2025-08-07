@@ -167,21 +167,27 @@ impl CircuitBreaker {
     }
 
     /// Record a liquidation attempt (successful or failed) for frequency monitoring
-    /// 
+    ///
     /// This is the preferred method for tracking liquidation attempts as it correctly
     /// distinguishes between successful and failed attempts.
-    /// 
+    ///
     /// # Arguments
     /// * `liquidation_succeeded` - Whether the liquidation was successful
     /// * `gas_price_wei` - Current gas price in wei (optional)
-    /// 
+    ///
     /// # Example
-    /// ```rust
+    /// ```rust,no_run
+    /// # use liquidation_bot::circuit_breaker::CircuitBreaker;
+    /// # use alloy_primitives::U256;
+    /// # async fn example(circuit_breaker: &CircuitBreaker) -> eyre::Result<()> {
+    /// # let gas_price = U256::from(20_000_000_000u64);
     /// // Record a failed liquidation attempt
     /// circuit_breaker.record_liquidation_attempt(false, Some(gas_price)).await?;
-    /// 
+    ///
     /// // Record a successful liquidation
     /// circuit_breaker.record_liquidation_attempt(true, Some(gas_price)).await?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn record_liquidation_attempt(
         &self,
@@ -224,18 +230,25 @@ impl CircuitBreaker {
     }
 
     /// Record price updates and non-liquidation market data
-    /// 
+    ///
     /// This method should be used for recording price changes and gas price updates
     /// that are NOT related to liquidation attempts.
-    /// 
+    ///
     /// # Arguments
     /// * `price` - Current asset price (optional)
     /// * `gas_price_wei` - Current gas price in wei (optional)
-    /// 
+    ///
     /// # Example
-    /// ```rust
+    /// ```rust,no_run
+    /// # use liquidation_bot::circuit_breaker::CircuitBreaker;
+    /// # use alloy_primitives::U256;
+    /// # async fn example(circuit_breaker: &CircuitBreaker) -> eyre::Result<()> {
+    /// # let new_price = U256::from(50000 * 10u128.pow(18));
+    /// # let gas_price = U256::from(20_000_000_000u64);
     /// // Record a price update from oracle
     /// circuit_breaker.record_price_update(Some(new_price), Some(gas_price)).await?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn record_price_update(
         &self,
@@ -278,20 +291,20 @@ impl CircuitBreaker {
     }
 
     /// ⚠️ DEPRECATED: Use `record_liquidation_attempt()` or `record_price_update()` instead
-    /// 
+    ///
     /// **CRITICAL BUG**: This method has a fundamental design flaw that prevents it from
     /// correctly tracking failed liquidation attempts. When `liquidation_occurred` is false,
     /// the method cannot distinguish between:
     /// 1. A failed liquidation attempt (should count as an attempt)
     /// 2. A regular market data update with no liquidation (should not count)
-    /// 
+    ///
     /// This causes the circuit breaker to **miss liquidation floods** when many liquidations
     /// fail due to network congestion, gas spikes, or other issues.
-    /// 
+    ///
     /// **Migration Guide**:
     /// - For liquidation tracking: Use `record_liquidation_attempt(success, gas_price)`
     /// - For price updates: Use `record_price_update(price, gas_price)`
-    /// 
+    ///
     /// This method is maintained only for backward compatibility and will be removed in v2.0.
     #[deprecated(
         since = "1.1.0",
@@ -316,7 +329,7 @@ impl CircuitBreaker {
             // failed liquidation attempts and regular market data updates.
             // This causes the circuit breaker to miss liquidation floods when
             // liquidations fail due to network issues.
-            // 
+            //
             // CORRECT USAGE:
             // - Use record_liquidation_attempt() for ANY liquidation attempt
             // - Use record_price_update() for pure market data updates
@@ -1214,25 +1227,25 @@ mod tests {
             .await
             .unwrap();
         sleep(Duration::from_millis(100)).await;
-        
+
         circuit_breaker
             .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
             .await
             .unwrap();
         sleep(Duration::from_millis(100)).await;
-        
+
         circuit_breaker
             .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
             .await
             .unwrap();
         sleep(Duration::from_millis(100)).await;
-        
+
         circuit_breaker
             .record_liquidation_attempt(true, Some(gas_multiplier_to_wei(2))) // Success
             .await
             .unwrap();
         sleep(Duration::from_millis(100)).await;
-        
+
         circuit_breaker
             .record_liquidation_attempt(false, Some(gas_multiplier_to_wei(2))) // Failed
             .await
@@ -1293,16 +1306,20 @@ mod tests {
             .unwrap();
 
         let status_report = circuit_breaker.get_status_report();
-        
+
         // Should count 3 total attempts (1 successful + 2 failed)
         assert_eq!(
-            status_report.current_conditions.current_liquidations_per_minute,
+            status_report
+                .current_conditions
+                .current_liquidations_per_minute,
             3
         );
-        
+
         // Should count only 1 successful liquidation
         assert_eq!(
-            status_report.current_conditions.current_successful_liquidations_per_minute,
+            status_report
+                .current_conditions
+                .current_successful_liquidations_per_minute,
             1
         );
     }
