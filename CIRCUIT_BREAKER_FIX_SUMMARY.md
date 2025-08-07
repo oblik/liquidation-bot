@@ -139,18 +139,46 @@ test result: ok. 2 passed; 0 failed
 2. **Alerting:** Create specific alerts for failed liquidation floods
 3. **Dashboard Updates:** Show failed attempt rate in monitoring dashboards
 
+## Additional Fix: Scanner False Positives
+
+### New Issue Discovered (Fixed)
+
+During testing, we discovered the scanner was causing false positive liquidation floods:
+
+1. **Problem:** Scanner sent liquidation opportunities for ALL at-risk users (HF < 1.1), not just liquidatable ones (HF < 1.0)
+2. **Impact:** Hundreds of false liquidation attempts per minute, triggering circuit breaker unnecessarily
+3. **Root Cause:** Mismatch between at-risk threshold (1.1) and liquidation threshold (1.0)
+
+### Scanner Fix Applied
+
+**Modified:** `src/monitoring/scanner.rs`
+- Now only sends `BotEvent::LiquidationOpportunity` for users with HF < 1.0
+- Fixed full rescan to check all liquidatable users, not just newly discovered ones
+- Added clear logging to distinguish at-risk vs liquidatable users
+
+### Combined Impact
+
+With both fixes:
+1. **Circuit Breaker:** Correctly tracks all liquidation attempts (successful and failed)
+2. **Scanner:** Only attempts liquidations for actually liquidatable users
+3. **Result:** No more false positive liquidation floods, accurate circuit breaker protection
+
 ## Conclusion
 
-This fix addresses a **critical safety issue** in the liquidation bot's circuit breaker system. The bug silently ignored failed liquidation attempts, potentially allowing the bot to continue operating during dangerous network conditions. 
+This fix addresses **two critical safety issues** in the liquidation bot's system:
+
+1. **Circuit breaker bug:** Silently ignored failed liquidation attempts
+2. **Scanner bug:** Sent false liquidation opportunities for non-liquidatable users
 
 The solution provides:
 - ✅ **Correct tracking** of all liquidation attempts
+- ✅ **Elimination of false positives** from non-liquidatable users
 - ✅ **Backward compatibility** during migration
 - ✅ **Clear migration path** with comprehensive documentation
 - ✅ **Thorough test coverage** proving the fix works
 
 **Status:** Ready for production deployment
 
-**Risk Level:** Critical bug fixed, low risk migration path
+**Risk Level:** Critical bugs fixed, low risk migration path
 
-**Recommendation:** Deploy immediately to prevent potential losses during network congestion events
+**Recommendation:** Deploy immediately to prevent potential losses and false circuit breaker triggers

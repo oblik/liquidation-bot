@@ -252,6 +252,40 @@ If you encounter issues during migration:
 - [ ] Updated any documentation or comments
 - [ ] Deployed and monitored the fix
 
+### Scanner False Positives Fix
+
+In addition to the circuit breaker API migration, ensure your scanner is configured correctly:
+
+#### Problem Identified
+The scanner was sending liquidation opportunities for ALL at-risk users (health factor < 1.1), not just liquidatable ones (health factor < 1.0). This caused:
+- Hundreds of false liquidation attempts per minute
+- Circuit breaker triggering due to "liquidation floods" that weren't real
+- Excessive "Liquidation blocked by circuit breaker" warnings in logs
+
+#### Solution Applied
+The scanner now correctly distinguishes between:
+- **At-risk users** (1.0 < HF < 1.1): Monitored but NOT sent for liquidation
+- **Liquidatable users** (HF < 1.0): Sent for liquidation processing
+
+#### Key Thresholds
+```rust
+const LIQUIDATION_THRESHOLD: u64 = 1000000000000000000; // 1.0 - user can be liquidated
+const CRITICAL_THRESHOLD: u64 = 1100000000000000000;    // 1.1 - user is at risk
+```
+
+#### What You'll See in Logs
+```
+// For at-risk but not liquidatable users:
+"User 0x... is at-risk but NOT liquidatable yet (HF: 1.061 >= 1.0)"
+
+// For liquidatable users:
+"🎯 User 0x... is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity"
+```
+
 ### Critical Reminder
 
-**This is a CRITICAL safety fix**. The old API silently fails to track failed liquidation attempts, which can lead to financial losses during network congestion or gas spikes. Migrate as soon as possible to ensure your bot's circuit breaker functions correctly under all conditions.
+**These are CRITICAL safety fixes**:
+1. The old circuit breaker API silently fails to track failed liquidation attempts
+2. The scanner false positives can trigger unnecessary circuit breaker activations
+
+Migrate as soon as possible to ensure your bot's circuit breaker functions correctly under all conditions and only processes legitimate liquidation opportunities.
