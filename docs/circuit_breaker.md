@@ -6,10 +6,12 @@ The liquidation bot now includes a sophisticated circuit breaker system designed
 
 The circuit breaker monitors three key market conditions:
 1. **Price Volatility** - Detects sudden price crashes or spikes
-2. **Liquidation Frequency** - Identifies flooding of liquidations in short time periods  
+2. **Liquidation Frequency** - Identifies flooding of liquidation attempts (both successful and failed) in short time periods  
 3. **Gas Price Spikes** - Monitors for extremely high gas costs
 
 When extreme conditions are detected, the circuit breaker automatically transitions through different states to protect the bot from dangerous market conditions.
+
+**Note:** The circuit breaker tracks ALL liquidation attempts, including failed ones, to detect network congestion or systemic issues. Only users with health factor < 1.0 trigger liquidation attempts.
 
 ## Circuit Breaker States
 
@@ -109,9 +111,15 @@ Trigger if: Volatility > MAX_PRICE_VOLATILITY_THRESHOLD
 
 #### Liquidation Flood Trigger
 ```
-Liquidations per minute = (Liquidation count in window) * 60 / window_seconds
+Liquidations per minute = (Liquidation attempt count in window) * 60 / window_seconds
 Trigger if: Liquidations per minute > MAX_LIQUIDATIONS_PER_MINUTE
 ```
+
+**Important Notes:**
+- Counts ALL liquidation attempts (both successful and failed)
+- Failed attempts are tracked to detect network congestion or gas issues
+- Only users with health factor < 1.0 trigger liquidation attempts
+- Users with 1.0 < HF < 1.1 are monitored but don't count toward this threshold
 
 #### Gas Price Spike Trigger
 ```
@@ -275,10 +283,18 @@ let json_status = serde_json::to_string(&status)?;
 - Check monitoring window settings
 
 ### Too Many False Positives  
+- **Check scanner thresholds**: Ensure only HF < 1.0 users trigger liquidations
+- **Verify logs**: Look for "is at-risk but NOT liquidatable" messages
 - Increase volatility threshold
 - Extend monitoring window
 - Reduce liquidation frequency threshold
 - Consider market-specific adjustments
+
+**Common Issue: Scanner False Positives**
+If you see excessive "Liquidation blocked by circuit breaker" warnings:
+- The scanner may be sending opportunities for at-risk (HF < 1.1) instead of liquidatable (HF < 1.0) users
+- This has been fixed in the latest version - ensure you're running updated code
+- Look for log: "User is LIQUIDATABLE (HF < 1.0)" to confirm proper filtering
 
 ### Circuit Breaker Stuck Open
 - Check if conditions are still extreme
