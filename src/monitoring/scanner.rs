@@ -668,17 +668,22 @@ where
                                     format_health_factor(position.health_factor)
                                 );
 
-                                // Store in database
-                                if let Err(e) =
-                                    crate::database::save_user_position(&db_pool, &position).await
-                                {
-                                    error!("Failed to store user position: {}", e);
-                                }
+                                                // Store in database
+                if let Err(e) =
+                    crate::database::save_user_position(&db_pool, &position).await
+                {
+                    error!("Failed to store user position: {}", e);
+                }
 
-                                // Send to liquidation opportunity channel
-                                if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
-                                    warn!("Failed to send liquidation opportunity: {}", e);
-                                }
+                // Only send liquidation opportunity if user is actually liquidatable (HF < 1.0)
+                if position.health_factor < U256::from(LIQUIDATION_THRESHOLD) && position.total_debt_base > U256::ZERO {
+                    info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
+                    if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                        warn!("Failed to send liquidation opportunity: {}", e);
+                    }
+                } else if position.health_factor < U256::from(CRITICAL_THRESHOLD) {
+                    debug!("User {:?} is at-risk but NOT liquidatable yet (HF: {} >= 1.0)", user.address, format_health_factor(position.health_factor));
+                }
                             }
 
                             // Brief delay between individual checks
@@ -741,11 +746,17 @@ where
                                         user.address,
                                         format_health_factor(position.health_factor)
                                     );
+                                }
 
-                                    // Send to liquidation opportunity channel
+                                // Send liquidation opportunity for ANY user that is actually liquidatable (HF < 1.0)
+                                // regardless of whether they're newly at-risk or not
+                                if position.health_factor < U256::from(LIQUIDATION_THRESHOLD) && position.total_debt_base > U256::ZERO {
+                                    info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
                                     if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
                                         warn!("Failed to send liquidation opportunity: {}", e);
                                     }
+                                } else if position.health_factor < U256::from(CRITICAL_THRESHOLD) {
+                                    debug!("User {:?} is at-risk but NOT liquidatable yet (HF: {} >= 1.0)", user.address, format_health_factor(position.health_factor));
                                 }
                             }
 
