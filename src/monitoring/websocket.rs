@@ -27,6 +27,8 @@ pub async fn start_event_monitoring<P>(
     ws_provider: Arc<dyn Provider>,
     ws_url: &str,
     event_tx: mpsc::UnboundedSender<BotEvent>,
+    priority_liquidation_tx: Option<mpsc::Sender<Address>>,  // New parameter
+    ws_fast_path: bool,  // New parameter for enabling fast path
 ) -> Result<()>
 where
     P: Provider + 'static,
@@ -41,15 +43,23 @@ where
 
         // Instead of exiting early, start polling-based event monitoring
         info!("🔄 Starting getLogs-based polling for continuous event discovery...");
-        return start_polling_event_monitoring(provider, event_tx).await;
+        return start_polling_event_monitoring(provider, event_tx, priority_liquidation_tx, ws_fast_path).await;
     }
 
     info!("🚀 Starting real-time WebSocket event monitoring...");
+    if ws_fast_path {
+        info!("⚡ WebSocket fast path ENABLED - liquidations will be checked immediately");
+    } else {
+        info!("🐢 WebSocket fast path DISABLED - using standard event queue");
+    }
 
     let pool_address: Address = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5".parse()?;
 
     // Create a general filter for all events from the Aave pool
     let pool_filter = Filter::new().address(pool_address);
+
+    // Clone provider for the spawned task
+    let provider_clone = provider.clone();
 
     tokio::spawn(async move {
         info!("Subscribing to Aave Pool events...");
@@ -68,7 +78,14 @@ where
         info!("🎧 Listening for real-time Aave events...");
 
         while let Some(log) = stream.next().await {
-            if let Err(e) = handle_log_event(log, &event_tx).await {
+            if let Err(e) = handle_log_event_with_fast_path(
+                log, 
+                &event_tx, 
+                &priority_liquidation_tx,
+                ws_fast_path,
+                &provider_clone,
+                pool_address,
+            ).await {
                 error!("Error handling log event: {}", e);
             }
         }
@@ -82,6 +99,8 @@ where
 async fn start_polling_event_monitoring<P>(
     provider: Arc<P>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
+    priority_liquidation_tx: Option<mpsc::Sender<Address>>,
+    ws_fast_path: bool,
 ) -> Result<()>
 where
     P: Provider + 'static,
@@ -105,13 +124,23 @@ where
     // Create interval for polling (every 10 seconds to balance real-time vs rate limits)
     let mut poll_interval = interval(Duration::from_secs(10));
 
+    // Clone provider for the spawned task
+    let provider_clone = provider.clone();
+
     tokio::spawn(async move {
         info!("🔄 Polling loop started for event discovery");
 
         loop {
             poll_interval.tick().await;
 
-            if let Err(e) = poll_for_events(&provider, pool_address, &key_events, &event_tx).await {
+            if let Err(e) = poll_for_events(
+                &provider_clone, 
+                pool_address, 
+                &key_events, 
+                &event_tx,
+                &priority_liquidation_tx,
+                ws_fast_path,
+            ).await {
                 error!("Error during event polling: {}", e);
                 // Continue polling even if one round fails
             }
@@ -128,6 +157,8 @@ async fn poll_for_events<P>(
     pool_address: Address,
     key_events: &[(&str, alloy_primitives::FixedBytes<32>)],
     event_tx: &mpsc::UnboundedSender<BotEvent>,
+    priority_liquidation_tx: &Option<mpsc::Sender<Address>>,
+    ws_fast_path: bool,
 ) -> Result<()>
 where
     P: Provider,
@@ -172,8 +203,21 @@ where
                 }
 
                 for log in logs {
-                    if let Err(e) = handle_log_event(log, event_tx).await {
-                        error!("Error handling {} event: {}", event_name, e);
+                    if ws_fast_path {
+                        if let Err(e) = handle_log_event_with_fast_path(
+                            log,
+                            event_tx,
+                            priority_liquidation_tx,
+                            ws_fast_path,
+                            provider,
+                            pool_address,
+                        ).await {
+                            error!("Error handling {} event: {}", event_name, e);
+                        }
+                    } else {
+                        if let Err(e) = handle_log_event(log, event_tx).await {
+                            error!("Error handling {} event: {}", event_name, e);
+                        }
                     }
                 }
             }
@@ -200,6 +244,91 @@ where
     // Update last processed block
     LAST_PROCESSED_BLOCK.store(current_block, Ordering::Relaxed);
 
+    Ok(())
+}
+
+/// Enhanced log event handler with WebSocket fast path for immediate liquidation detection
+pub async fn handle_log_event_with_fast_path<P>(
+    log: Log,
+    event_tx: &mpsc::UnboundedSender<BotEvent>,
+    priority_liquidation_tx: &Option<mpsc::Sender<Address>>,
+    ws_fast_path: bool,
+    provider: &Arc<P>,
+    pool_address: Address,
+) -> Result<()>
+where
+    P: Provider,
+{
+    // Extract user addresses from log topics
+    let topics = log.topics();
+    debug!("Processing log event with {} topics", topics.len());
+    
+    let mut user_addresses = std::collections::HashSet::new();
+    
+    // Most Aave events have user address in topic[1] (after the event signature)
+    if topics.len() >= 2 {
+        let user_bytes = topics[1].as_slice();
+        if user_bytes.len() >= 20 {
+            let addr_bytes = &user_bytes[12..32];
+            if let Ok(user_addr) = Address::try_from(addr_bytes) {
+                user_addresses.insert(user_addr);
+            }
+        }
+    }
+    
+    // Also check topic[2] for events that might have user there
+    if topics.len() >= 3 {
+        let user_bytes = topics[2].as_slice();
+        if user_bytes.len() >= 20 {
+            let addr_bytes = &user_bytes[12..32];
+            if let Ok(user_addr) = Address::try_from(addr_bytes) {
+                user_addresses.insert(user_addr);
+            }
+        }
+    }
+    
+    // Process each unique user address
+    for user_addr in user_addresses {
+        debug!("Detected event for user: {}", user_addr);
+        
+        // WebSocket fast path: immediately check health factor if enabled
+        if ws_fast_path && priority_liquidation_tx.is_some() {
+            // Perform immediate health check
+            match crate::monitoring::scanner::check_user_health(provider, pool_address, user_addr, 3).await {
+                Ok(position) => {
+                    // Check if user is liquidatable (HF < 1.0 and has debt)
+                    if position.health_factor < alloy_primitives::U256::from(1000000000000000000u64) // 1.0
+                        && position.total_debt_base > alloy_primitives::U256::ZERO 
+                    {
+                        info!(
+                            "⚡ FAST PATH: User {:?} is LIQUIDATABLE (HF: {:?}) - sending to priority channel",
+                            user_addr, position.health_factor
+                        );
+                        
+                        // Send to priority channel
+                        if let Some(priority_tx) = priority_liquidation_tx {
+                            if let Err(e) = priority_tx.send(user_addr).await {
+                                error!("Failed to send to priority liquidation channel: {}", e);
+                            }
+                        }
+                    } else {
+                        debug!(
+                            "Fast path check: User {:?} not liquidatable (HF: {:?}, Debt: {:?})",
+                            user_addr, position.health_factor, position.total_debt_base
+                        );
+                    }
+                }
+                Err(e) => {
+                    debug!("Fast path health check failed for {:?}: {}", user_addr, e);
+                    // Don't block normal processing on fast path errors
+                }
+            }
+        }
+        
+        // Always send UserPositionChanged for bookkeeping
+        let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr));
+    }
+    
     Ok(())
 }
 

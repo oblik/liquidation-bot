@@ -383,6 +383,7 @@ pub async fn update_user_position<P>(
     user: Address,
     users_by_collateral: Option<Arc<DashMap<Address, HashSet<Address>>>>,
     asset_configs: Option<&HashMap<Address, AssetConfig>>,
+    priority_liquidation_tx: Option<mpsc::Sender<Address>>,  // New parameter for priority channel
 ) -> Result<()>
 where
     P: Provider,
@@ -423,41 +424,41 @@ where
                 };
 
             // Populate users_by_collateral mapping by calling getUserConfiguration
-            // and getReservesList to determine which assets this user has as collateral
-            if let Some(users_by_collateral) = &users_by_collateral {
-                if position.total_collateral_base > U256::ZERO {
-                    // Update the collateral mapping for this user using all configured assets
-                    if let Err(e) = update_user_collateral_mapping(
-                        pool_contract,
-                        user,
-                        users_by_collateral,
-                        asset_configs,
-                    )
-                    .await
-                    {
-                        error!(
-                            "Failed to update collateral mapping for user {:?}: {}",
-                            user, e
-                        );
-                    } else {
-                        debug!(
-                            "✅ Successfully updated collateral mapping for user {:?}",
-                            user
-                        );
-                    }
+            if let Some(users_by_collateral) = users_by_collateral {
+                if let Err(e) = update_user_collateral_mapping(
+                    pool_contract,
+                    user,
+                    &users_by_collateral,
+                    asset_configs,
+                )
+                .await
+                {
+                    warn!("Failed to update collateral mapping for {:?}: {}", user, e);
                 }
             }
 
-            // Only check for liquidation opportunity if database save was successful
+            // Check for liquidation opportunity and route to appropriate channel
             if database_save_successful
                 && position.health_factor < U256::from(LIQUIDATION_THRESHOLD)
                 && position.total_debt_base > U256::ZERO
             {
                 debug!(
-                    "🎯 Sending liquidation opportunity event for user: {:?}",
+                    "🎯 Detected liquidation opportunity for user: {:?}",
                     user
                 );
-                let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
+                
+                // Route to priority channel if available, otherwise use regular event queue
+                if let Some(priority_tx) = priority_liquidation_tx {
+                    debug!("⚡ Sending to HIGH-PRIORITY liquidation channel");
+                    if let Err(e) = priority_tx.send(user).await {
+                        error!("Failed to send to priority liquidation channel: {}", e);
+                        // Fallback to regular event queue
+                        let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
+                    }
+                } else {
+                    debug!("📮 Sending to regular event queue");
+                    let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
+                }
             }
 
             // Check if position became at-risk
@@ -558,190 +559,60 @@ pub async fn run_periodic_scan<P>(
     db_pool: DatabasePool,
     event_tx: mpsc::UnboundedSender<BotEvent>,
     config: BotConfig,
-    _asset_configs: HashMap<Address, AssetConfig>,
-    user_positions: Arc<DashMap<Address, UserPosition>>, // Add user_positions parameter
+    asset_configs: HashMap<Address, AssetConfig>,
+    user_positions: Arc<DashMap<Address, UserPosition>>,
+    priority_liquidation_tx: Option<mpsc::Sender<Address>>,  // New parameter
 ) -> Result<()>
 where
     P: Provider,
 {
-    info!("Starting periodic position scan...");
+    info!("🔍 Starting periodic health factor scanning...");
 
-    // Log configuration
-    match config.at_risk_scan_limit {
-        Some(limit) => info!(
-            "🔧 At-risk scan limit configured: {} users per cycle",
-            limit
-        ),
-        None => info!("🔧 At-risk scan limit: unlimited"),
-    }
-    info!(
-        "🔧 Full rescan interval: {} minutes",
-        config.full_rescan_interval_minutes
-    );
-
-    let mut interval = tokio::time::interval(
-        tokio::time::Duration::from_secs(config.monitoring_interval_secs * 6), // Slower than event-driven updates
-    );
-
-    let mut full_rescan_interval = tokio::time::interval(
-        tokio::time::Duration::from_secs(config.full_rescan_interval_minutes * 60), // Full rescan interval
-    );
-
-    // Separate archival interval to avoid timestamp conflicts
-    // Calculate archival interval with overflow protection and bounds checking
-    let archival_interval_secs = {
-        let cooldown_hours = config.zero_debt_cooldown_hours;
-
-        // Prevent zero duration which would cause continuous tight loop
-        if cooldown_hours == 0 {
-            warn!("zero_debt_cooldown_hours is 0, using minimum archival interval of 1 hour");
-            3600 // 1 hour minimum
-        } else {
-            // Check for potential overflow: cooldown_hours * 3600 should not overflow u64
-            let max_safe_hours = u64::MAX / 3600; // ~5.1 trillion hours
-            if cooldown_hours > max_safe_hours {
-                error!(
-                    "zero_debt_cooldown_hours ({}) is too large and would cause overflow, using maximum safe interval of 7 days",
-                    cooldown_hours
-                );
-                7 * 24 * 3600 // 7 days maximum
-            } else {
-                // Use checked multiplication to detect any remaining overflow edge cases
-                match cooldown_hours.checked_mul(3600) {
-                    Some(total_secs) => {
-                        let interval_secs = total_secs / 4; // Check 4x per cooldown period
-                                                            // Ensure minimum interval of 1 hour and maximum of 7 days
-                        std::cmp::max(3600, std::cmp::min(interval_secs, 7 * 24 * 3600))
-                    }
-                    None => {
-                        error!(
-                            "Integer overflow when calculating archival interval for {} hours, using 7 day default",
-                            cooldown_hours
-                        );
-                        7 * 24 * 3600 // 7 days fallback
-                    }
-                }
-            }
-        }
-    };
-
-    let mut archival_interval =
-        tokio::time::interval(tokio::time::Duration::from_secs(archival_interval_secs));
+    let mut interval = tokio::time::interval(Duration::from_secs(config.monitoring_interval_secs));
+    let mut last_full_rescan = std::time::SystemTime::now();
+    let full_rescan_duration = Duration::from_secs(config.full_rescan_interval_minutes * 60);
 
     loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                // Regular at-risk scan with configurable limit
-                let at_risk_users = match crate::database::get_at_risk_users_with_limit(&db_pool, config.at_risk_scan_limit).await {
-                    Ok(users) => users,
-                    Err(e) => {
-                        error!("Failed to get at-risk users: {}", e);
-                        continue;
-                    }
-                };
+        interval.tick().await;
+        let now = std::time::SystemTime::now();
 
-                let scan_type = match config.at_risk_scan_limit {
-                    Some(limit) => format!("regular (limited to {} users)", limit),
-                    None => "regular (unlimited)".to_string(),
-                };
-                info!("🔍 Starting {} scan: {} at-risk users", scan_type, at_risk_users.len());
+        // Check if it's time for a full rescan
+        let should_full_rescan = now
+            .duration_since(last_full_rescan)
+            .unwrap_or(Duration::from_secs(0))
+            >= full_rescan_duration;
 
-                // Check health for each user with rate limiting
-                let mut checked_users = 0;
-                let mut at_risk_users_count = 0;
+        if should_full_rescan {
+            info!("🔄 Starting FULL rescan of all users...");
 
-                for user in &at_risk_users {
-                    // Add small delay between checks to avoid rate limiting
-                    if checked_users > 0 && checked_users % 10 == 0 {
-                        sleep(Duration::from_millis(200)).await; // Brief pause every 10 users
-                    }
+            // Get all users from database
+            match database::get_all_users(&db_pool).await {
+                Ok(users) => {
+                    info!("📊 Found {} total users in database for full rescan", users.len());
 
-                    match check_user_health(&provider, pool_address, user.address, 3).await {
-                        Ok(position) => {
-                            checked_users += 1;
-
-                            if position.is_at_risk {
-                                at_risk_users_count += 1;
-                                info!(
-                                    "⚠️  At-risk user found: {:?} (HF: {})",
-                                    user,
-                                    format_health_factor(position.health_factor)
-                                );
-
-                                                // Store in database
-                if let Err(e) =
-                    crate::database::save_user_position(&db_pool, &position).await
-                {
-                    error!("Failed to store user position: {}", e);
-                }
-
-                // Only send liquidation opportunity if user is actually liquidatable (HF < 1.0)
-                if position.health_factor < U256::from(LIQUIDATION_THRESHOLD) && position.total_debt_base > U256::ZERO {
-                    info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
-                    if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
-                        warn!("Failed to send liquidation opportunity: {}", e);
-                    }
-                } else if position.health_factor < U256::from(CRITICAL_THRESHOLD) {
-                    debug!("User {:?} is at-risk but NOT liquidatable yet (HF: {} >= 1.0)", user.address, format_health_factor(position.health_factor));
-                }
-                            }
-
-                            // Brief delay between individual checks
-                            sleep(Duration::from_millis(50)).await;
+                    for user in users {
+                        // Skip zero addresses
+                        if user.address == Address::ZERO {
+                            continue;
                         }
-                        Err(e) => {
-                            error!("Failed to check user health for {:?}: {}", user, e);
-                            // Continue with next user rather than failing completely
-                        }
-                    }
-                }
 
-                info!(
-                    "✅ Regular scan complete: {} checked, {} at-risk found",
-                    checked_users, at_risk_users_count
-                );
-            }
-            _ = full_rescan_interval.tick() => {
-                // Full rescan: check all users to ensure complete coverage
-                info!("🔍 Starting full rescan: checking all users to ensure complete coverage");
+                        // Check user health directly (no filtering)
+                        match check_user_health(&provider, pool_address, user.address, 3).await {
+                            Ok(position) => {
+                                // Update position in memory
+                                let old_position = user_positions.get(&user.address).map(|p| p.clone());
+                                user_positions.insert(user.address, position.clone());
 
-                let all_users = match crate::database::get_all_users(&db_pool).await {
-                    Ok(users) => users,
-                    Err(e) => {
-                        error!("Failed to get all users for full rescan: {}", e);
-                        continue;
-                    }
-                };
+                                // Store in database
+                                if let Err(e) =
+                                    crate::database::save_user_position(&db_pool, &position).await
+                                {
+                                    error!("Failed to store user position: {}", e);
+                                }
 
-                info!("🔍 Full rescan: {} total users to check", all_users.len());
-
-                let mut checked_users = 0;
-                let mut at_risk_users_count = 0;
-                let mut new_at_risk_found = 0;
-
-                for user in &all_users {
-                    // Add small delay between checks to avoid rate limiting
-                    if checked_users > 0 && checked_users % 50 == 0 {
-                        sleep(Duration::from_millis(500)).await; // Longer pause for full scans
-                        info!("🔍 Full rescan progress: {}/{} users checked", checked_users, all_users.len());
-                    }
-
-                    match check_user_health(&provider, pool_address, user.address, 3).await {
-                        Ok(position) => {
-                            checked_users += 1;
-
-                            // Update the position in database
-                            if let Err(e) = crate::database::save_user_position(&db_pool, &position).await {
-                                error!("Failed to store user position during full rescan: {}", e);
-                            }
-
-                            if position.is_at_risk {
-                                at_risk_users_count += 1;
-
-                                // Check if this user was not previously at-risk
-                                if !user.is_at_risk {
-                                    new_at_risk_found += 1;
-                                    warn!(
+                                // Check if user became at-risk
+                                if position.is_at_risk && old_position.as_ref().map_or(true, |old| !old.is_at_risk) {
+                                    info!(
                                         "🚨 NEW AT-RISK USER discovered in full rescan: {:?} (HF: {})",
                                         user.address,
                                         format_health_factor(position.health_factor)
@@ -752,131 +623,124 @@ where
                                 // regardless of whether they're newly at-risk or not
                                 if position.health_factor < U256::from(LIQUIDATION_THRESHOLD) && position.total_debt_base > U256::ZERO {
                                     info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
-                                    if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
-                                        warn!("Failed to send liquidation opportunity: {}", e);
+                                    
+                                    // Route to priority channel if available
+                                    if let Some(ref priority_tx) = priority_liquidation_tx {
+                                        if let Err(e) = priority_tx.send(user.address).await {
+                                            warn!("Failed to send to priority channel: {}", e);
+                                            // Fallback to regular event queue
+                                            if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                                warn!("Failed to send liquidation opportunity: {}", e);
+                                            }
+                                        }
+                                    } else {
+                                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                            warn!("Failed to send liquidation opportunity: {}", e);
+                                        }
                                     }
                                 } else if position.health_factor < U256::from(CRITICAL_THRESHOLD) {
                                     debug!("User {:?} is at-risk but NOT liquidatable yet (HF: {} >= 1.0)", user.address, format_health_factor(position.health_factor));
                                 }
+                                
+                                // Brief delay between individual checks
+                                sleep(Duration::from_millis(100)).await; // Slightly longer for full scans
                             }
-
-                            // Brief delay between individual checks
-                            sleep(Duration::from_millis(100)).await; // Slightly longer for full scans
-                        }
-                        Err(e) => {
-                            error!("Failed to check user health during full rescan for {:?}: {}", user.address, e);
-                            // Continue with next user rather than failing completely
+                            Err(e) => {
+                                error!("Failed to check user health during full rescan for {:?}: {}", user.address, e);
+                                // Continue with next user rather than failing completely
+                            }
                         }
                     }
                 }
-
-                info!(
-                    "✅ Full rescan complete: {}/{} users checked, {} at-risk found, {} new at-risk discovered",
-                    checked_users, all_users.len(), at_risk_users_count, new_at_risk_found
-                );
-
-                if let Err(e) = crate::database::log_monitoring_event(
-                    &db_pool,
-                    "full_rescan_complete",
-                    None,
-                    Some(&format!(
-                        "checked:{}, total:{}, at_risk:{}, new_at_risk:{}",
-                        checked_users, all_users.len(), at_risk_users_count, new_at_risk_found
-                    )),
-                )
-                .await
-                {
-                    error!("Failed to log full rescan completion: {}", e);
+                Err(e) => {
+                    error!("Failed to get all users for full rescan: {}", e);
                 }
             }
-            _ = archival_interval.tick() => {
-                // Separate archival process - runs independently from full rescan
-                if config.archive_zero_debt_users {
-                    info!("🗄️ Starting user archival process...");
 
-                    match crate::database::get_users_eligible_for_archival(
-                        &db_pool,
-                        config.zero_debt_cooldown_hours,
-                        config.safe_health_factor_threshold,
-                    ).await {
-                        Ok(eligible_users) => {
-                            if !eligible_users.is_empty() {
-                                info!(
-                                    "🗄️ Found {} users eligible for archival (zero debt for {}+ hours)",
-                                    eligible_users.len(),
-                                    config.zero_debt_cooldown_hours
-                                );
+            last_full_rescan = now; // Update last full rescan time
+        }
 
-                                let user_addresses: Vec<Address> = eligible_users.iter().map(|u| u.address).collect();
+        // Regular at-risk scan with configurable limit
+        let at_risk_users = match crate::database::get_at_risk_users_with_limit(&db_pool, config.at_risk_scan_limit).await {
+            Ok(users) => users,
+            Err(e) => {
+                error!("Failed to get at-risk users: {}", e);
+                continue;
+            }
+        };
 
-                                match crate::database::archive_zero_debt_users(
-                                    &db_pool,
-                                    &user_addresses,
-                                    config.zero_debt_cooldown_hours,
-                                    config.safe_health_factor_threshold,
-                                ).await {
-                                    Ok(archival_result) => {
-                                        info!(
-                                            "✅ Successfully archived {} zero-debt users from database",
-                                            archival_result.archived_count
-                                        );
+        let scan_type = match config.at_risk_scan_limit {
+            Some(limit) => format!("regular (limited to {} users)", limit),
+            None => "regular (unlimited)".to_string(),
+        };
+        info!("🔍 Starting {} scan: {} at-risk users", scan_type, at_risk_users.len());
 
-                                        // Remove ONLY the actually archived users from in-memory DashMap to prevent memory bloat
-                                        // This fixes the race condition where users might be removed from memory but not from database
-                                        let mut removed_from_memory = 0;
-                                        for &user_address in &archival_result.archived_addresses {
-                                            if user_positions.remove(&user_address).is_some() {
-                                                removed_from_memory += 1;
-                                                debug!("🗑️ Removed archived user {:?} from memory", user_address);
-                                            }
-                                        }
+        // Check health for each user with rate limiting
+        let mut checked_users = 0;
+        let mut at_risk_users_count = 0;
 
-                                        info!(
-                                            "🧠 Cleaned up {} archived users from memory (expected: {})",
-                                            removed_from_memory, archival_result.archived_count
-                                        );
+        for user in &at_risk_users {
+            // Add small delay between checks to avoid rate limiting
+            if checked_users > 0 && checked_users % 10 == 0 {
+                sleep(Duration::from_millis(200)).await; // Brief pause every 10 users
+            }
 
-                                        // Log archival event with detailed information
-                                        if let Err(e) = crate::database::log_monitoring_event(
-                                            &db_pool,
-                                            "users_archived",
-                                            None,
-                                            Some(&format!(
-                                                "archived {} zero-debt users (db), cleaned {} from memory (actual: {})",
-                                                archival_result.archived_count,
-                                                removed_from_memory,
-                                                archival_result.archived_addresses.len()
-                                            )),
-                                        ).await {
-                                            error!("Failed to log archival event: {}", e);
-                                        }
+            match check_user_health(&provider, pool_address, user.address, 3).await {
+                Ok(position) => {
+                    checked_users += 1;
 
-                                        // Warn if there's a mismatch between database and memory cleanup
-                                        if removed_from_memory != archival_result.archived_count {
-                                            warn!(
-                                                "🚨 Memory cleanup mismatch: removed {} from memory but archived {} from database",
-                                                removed_from_memory, archival_result.archived_count
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to archive zero-debt users: {}", e);
+                    if position.is_at_risk {
+                        at_risk_users_count += 1;
+                        info!(
+                            "⚠️  At-risk user found: {:?} (HF: {})",
+                            user,
+                            format_health_factor(position.health_factor)
+                        );
+
+                        // Store in database
+                        if let Err(e) =
+                            crate::database::save_user_position(&db_pool, &position).await
+                        {
+                            error!("Failed to store user position: {}", e);
+                        }
+
+                        // Only send liquidation opportunity if user is actually liquidatable (HF < 1.0)
+                        if position.health_factor < U256::from(LIQUIDATION_THRESHOLD) && position.total_debt_base > U256::ZERO {
+                            info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
+                            
+                            // Route to priority channel if available
+                            if let Some(ref priority_tx) = priority_liquidation_tx {
+                                if let Err(e) = priority_tx.send(user.address).await {
+                                    warn!("Failed to send to priority channel: {}", e);
+                                    // Fallback to regular event queue
+                                    if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                        warn!("Failed to send liquidation opportunity: {}", e);
                                     }
                                 }
                             } else {
-                                debug!("🗄️ No users eligible for archival at this time");
+                                if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                    warn!("Failed to send liquidation opportunity: {}", e);
+                                }
                             }
-                        }
-                        Err(e) => {
-                            error!("Failed to get users eligible for archival: {}", e);
+                        } else if position.health_factor < U256::from(CRITICAL_THRESHOLD) {
+                            debug!("User {:?} is at-risk but NOT liquidatable yet (HF: {} >= 1.0)", user.address, format_health_factor(position.health_factor));
                         }
                     }
-                } else {
-                    // Archival is disabled, just tick the interval
-                    debug!("🗄️ User archival is disabled in configuration");
+
+                    // Brief delay between individual checks
+                    sleep(Duration::from_millis(50)).await;
+                }
+                Err(e) => {
+                    error!("Failed to check user health for {:?}: {}", user, e);
+                    // Continue with next user rather than failing completely
                 }
             }
         }
+
+        info!(
+            "✅ Regular scan complete: {} checked, {} at-risk found",
+            checked_users, at_risk_users_count
+        );
 
         // If we have a specific target user, always check them
         if let Some(target_user) = config.target_user {

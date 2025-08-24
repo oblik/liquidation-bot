@@ -45,6 +45,10 @@ pub struct BotConfig {
     pub circuit_breaker_cooldown_secs: u64, // Time to wait before resuming operations after circuit breaker activation
     pub min_gas_price_multiplier: u64, // Minimum gas price multiplier to consider extreme conditions
     pub max_gas_price_multiplier: u64, // Maximum gas price multiplier to trigger circuit breaker
+    
+    // Priority liquidation pipeline configuration
+    pub ws_fast_path: bool,  // Enable WebSocket fast path for immediate liquidations
+    pub liquidation_dedupe_seconds: u64,  // Deduplication window for liquidation attempts
 }
 
 impl BotConfig {
@@ -325,6 +329,26 @@ impl BotConfig {
             Err(_) => 5,
         };
 
+        // Priority liquidation pipeline configuration
+        let ws_fast_path = match std::env::var("WS_FAST_PATH") {
+            Ok(value) => value.parse::<bool>().unwrap_or(true),
+            Err(_) => true, // Default to enabled
+        };
+
+        let liquidation_dedupe_seconds = match std::env::var("LIQUIDATION_DEDUPE_SECONDS") {
+            Ok(seconds_str) => match seconds_str.parse::<u64>() {
+                Ok(seconds) => seconds,
+                Err(e) => {
+                    warn!(
+                        "Invalid LIQUIDATION_DEDUPE_SECONDS '{}': {}. Using default 2 seconds.",
+                        seconds_str, e
+                    );
+                    2
+                }
+            },
+            Err(_) => 2, // Default to 2 seconds
+        };
+
         Ok(Self {
             rpc_url,
             ws_url,
@@ -349,6 +373,8 @@ impl BotConfig {
             circuit_breaker_cooldown_secs,
             min_gas_price_multiplier,
             max_gas_price_multiplier,
+            ws_fast_path,
+            liquidation_dedupe_seconds,
         })
     }
 }

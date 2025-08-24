@@ -8,7 +8,7 @@ use eyre::Result;
 use parking_lot::RwLock as SyncRwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -35,6 +35,11 @@ pub struct LiquidationBot<P> {
     processing_users: Arc<SyncRwLock<HashSet<Address>>>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
     event_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<BotEvent>>>,
+    // High-priority liquidation pipeline
+    priority_liquidation_tx: mpsc::Sender<Address>,
+    priority_liquidation_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<Address>>>,
+    // Deduplication for priority liquidations (user -> last attempt time)
+    recent_liquidation_attempts: Arc<DashMap<Address, Instant>>,
     // Oracle price monitoring
     price_feeds: Arc<DashMap<Address, PriceFeed>>,
     asset_configs: HashMap<Address, AssetConfig>,
@@ -212,6 +217,9 @@ where
 
         info!("✅ Bot initialized with signer for transaction signing capability");
 
+        // Create priority liquidation channel with bounded capacity for backpressure
+        let (priority_liquidation_tx, priority_liquidation_rx) = mpsc::channel(100);
+
         Ok(Self {
             provider,
             ws_provider,
@@ -224,6 +232,11 @@ where
             processing_users: Arc::new(SyncRwLock::new(HashSet::new())),
             event_tx,
             event_rx: Arc::new(tokio::sync::Mutex::new(event_rx)),
+            // High-priority liquidation pipeline
+            priority_liquidation_tx,
+            priority_liquidation_rx: Arc::new(tokio::sync::Mutex::new(priority_liquidation_rx)),
+            // Deduplication for priority liquidations
+            recent_liquidation_attempts: Arc::new(DashMap::new()),
             // Oracle price monitoring
             price_feeds: Arc::new(DashMap::new()),
             asset_configs,
@@ -258,6 +271,7 @@ where
                         user,
                         Some(self.users_by_collateral.clone()),
                         Some(&self.asset_configs),
+                        Some(self.priority_liquidation_tx.clone()),
                     )
                     .await
                     {
@@ -405,6 +419,137 @@ where
         Ok(())
     }
 
+    /// High-priority liquidation processor - processes liquidations immediately
+    async fn run_priority_liquidation_processor(&self) -> Result<()> {
+        info!("🚀 Starting high-priority liquidation processor...");
+        
+        let mut priority_rx = self.priority_liquidation_rx.lock().await;
+        let dedupe_window = Duration::from_secs(self.config.liquidation_dedupe_seconds);
+        
+        while let Some(user) = priority_rx.recv().await {
+            // Check deduplication
+            let should_process = {
+                let now = Instant::now();
+                let mut should_process = true;
+                
+                if let Some(last_attempt) = self.recent_liquidation_attempts.get(&user) {
+                    if now.duration_since(*last_attempt) < dedupe_window {
+                        debug!(
+                            "⏭️ Skipping duplicate liquidation attempt for {:?} (attempted {:?} ago)",
+                            user,
+                            now.duration_since(*last_attempt)
+                        );
+                        should_process = false;
+                    }
+                }
+                
+                if should_process {
+                    self.recent_liquidation_attempts.insert(user, now);
+                }
+                
+                should_process
+            };
+            
+            if !should_process {
+                continue;
+            }
+            
+            info!("⚡ Processing HIGH-PRIORITY liquidation for user: {:?}", user);
+            
+            // Check circuit breaker before processing
+            let circuit_breaker_state_before = self.circuit_breaker.get_state();
+            
+            if !self.circuit_breaker.is_liquidation_allowed() {
+                warn!(
+                    "🚫 Priority liquidation blocked by circuit breaker (state: {:?}) for user: {:?}",
+                    circuit_breaker_state_before, user
+                );
+                self.circuit_breaker.record_blocked_liquidation();
+                
+                if let Err(e) = self
+                    .circuit_breaker
+                    .record_liquidation_attempt(false, None)
+                    .await
+                {
+                    warn!("Failed to record blocked liquidation attempt: {}", e);
+                }
+                continue;
+            }
+            
+            // Determine if this is a test liquidation
+            let is_test_liquidation = circuit_breaker_state_before
+                == crate::circuit_breaker::CircuitBreakerState::HalfOpen;
+            
+            // Get current gas price for circuit breaker monitoring
+            let current_gas_price = match self.provider.get_gas_price().await {
+                Ok(price) => Some(alloy_primitives::U256::from(price)),
+                Err(e) => {
+                    warn!("Failed to get current gas price: {}", e);
+                    None
+                }
+            };
+            
+            // Execute liquidation
+            let liquidation_result = liquidation::handle_liquidation_opportunity(
+                self.provider.clone(),
+                &self.db_pool,
+                user,
+                self.config.min_profit_threshold,
+                self.liquidator_contract_address,
+                Some(self.signer.clone()),
+                &self.pool_contract,
+                &self.liquidation_assets,
+            )
+            .await;
+            
+            let liquidation_succeeded = liquidation_result.is_ok();
+            
+            if let Err(e) = liquidation_result {
+                error!(
+                    "Failed to handle priority liquidation for {:?}: {}",
+                    user, e
+                );
+                
+                // Fallback to legacy handler for logging
+                if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
+                    &self.db_pool,
+                    user,
+                    self.config.min_profit_threshold,
+                )
+                .await
+                {
+                    error!("Legacy liquidation handler also failed: {}", legacy_err);
+                }
+            } else {
+                info!("✅ Successfully processed priority liquidation for {:?}", user);
+            }
+            
+            // Record liquidation attempt for circuit breaker
+            if let Err(e) = self
+                .circuit_breaker
+                .record_liquidation_attempt(liquidation_succeeded, current_gas_price)
+                .await
+            {
+                warn!(
+                    "Failed to record liquidation attempt for circuit breaker: {}",
+                    e
+                );
+            }
+            
+            // Handle test liquidation results
+            if is_test_liquidation {
+                if liquidation_succeeded {
+                    info!("✅ Test liquidation succeeded - circuit breaker will transition to OPEN");
+                } else {
+                    warn!("❌ Test liquidation failed - circuit breaker will remain CLOSED");
+                }
+            }
+        }
+        
+        warn!("Priority liquidation processor unexpectedly stopped");
+        Ok(())
+    }
+
     async fn handle_oracle_price_change(
         &self,
         asset_address: Address,
@@ -543,6 +688,8 @@ where
                 self.ws_provider.clone(),
                 &self.config.ws_url,
                 self.event_tx.clone(),
+                Some(self.priority_liquidation_tx.clone()),
+                self.config.ws_fast_path,
             ),
             oracle::start_oracle_monitoring(
                 self.provider.clone(),
@@ -553,6 +700,7 @@ where
                 self.price_feeds.clone(),
             ),
             self.run_event_processor(),
+            self.run_priority_liquidation_processor(),
             scanner::run_periodic_scan(
                 self.provider.clone(),
                 pool_address,
@@ -560,7 +708,8 @@ where
                 self.event_tx.clone(),
                 self.config.clone(),
                 self.asset_configs.clone(),
-                self.user_positions.clone(), // Add user_positions parameter
+                self.user_positions.clone(),
+                Some(self.priority_liquidation_tx.clone()),
             ),
             scanner::start_status_reporter(self.db_pool.clone(), self.user_positions.clone(),),
             self.circuit_breaker.run_alert_processor(),
