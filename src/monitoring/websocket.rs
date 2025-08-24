@@ -1,12 +1,15 @@
 use crate::events::BotEvent;
-use alloy_primitives::Address;
+use crate::monitoring::scanner;
+use alloy_primitives::{Address, U256};
 use alloy_provider::{Provider, ProviderBuilder, WsConnect};
 use alloy_rpc_types::{BlockNumberOrTag, Filter, Log};
 use alloy_sol_types::SolEvent;
 use eyre::Result;
 use futures::StreamExt;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info, warn};
@@ -15,6 +18,19 @@ use crate::models::{Borrow, Repay, Supply, Withdraw};
 
 // Static variable to track last processed block for polling mode
 static LAST_PROCESSED_BLOCK: AtomicU64 = AtomicU64::new(0);
+
+// Dedupe mechanism for fast path liquidations
+type DedupeMap = Arc<tokio::sync::RwLock<HashMap<Address, u64>>>;
+static FAST_PATH_DEDUPE: tokio::sync::OnceCell<DedupeMap> = tokio::sync::OnceCell::const_new();
+
+async fn get_dedupe_map() -> &'static DedupeMap {
+    FAST_PATH_DEDUPE.get_or_init(|| async {
+        Arc::new(tokio::sync::RwLock::new(HashMap::new()))
+    }).await
+}
+
+// Dedupe window in seconds
+const DEDUPE_WINDOW_SECS: u64 = 2;
 
 pub async fn try_connect_websocket(ws_url: &str) -> Result<Arc<dyn Provider>> {
     let ws_connect = WsConnect::new(ws_url.to_string());
@@ -27,6 +43,7 @@ pub async fn start_event_monitoring<P>(
     ws_provider: Arc<dyn Provider>,
     ws_url: &str,
     event_tx: mpsc::UnboundedSender<BotEvent>,
+    priority_liquidation_tx: Option<mpsc::UnboundedSender<Address>>,
 ) -> Result<()>
 where
     P: Provider + 'static,
@@ -41,7 +58,7 @@ where
 
         // Instead of exiting early, start polling-based event monitoring
         info!("🔄 Starting getLogs-based polling for continuous event discovery...");
-        return start_polling_event_monitoring(provider, event_tx).await;
+        return start_polling_event_monitoring(provider, event_tx, priority_liquidation_tx).await;
     }
 
     info!("🚀 Starting real-time WebSocket event monitoring...");
@@ -68,7 +85,7 @@ where
         info!("🎧 Listening for real-time Aave events...");
 
         while let Some(log) = stream.next().await {
-            if let Err(e) = handle_log_event(log, &event_tx).await {
+            if let Err(e) = handle_log_event(log, &event_tx, &priority_liquidation_tx, &provider, pool_address).await {
                 error!("Error handling log event: {}", e);
             }
         }
@@ -82,6 +99,7 @@ where
 async fn start_polling_event_monitoring<P>(
     provider: Arc<P>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
+    priority_liquidation_tx: Option<mpsc::UnboundedSender<Address>>,
 ) -> Result<()>
 where
     P: Provider + 'static,
@@ -111,7 +129,7 @@ where
         loop {
             poll_interval.tick().await;
 
-            if let Err(e) = poll_for_events(&provider, pool_address, &key_events, &event_tx).await {
+            if let Err(e) = poll_for_events(&provider, pool_address, &key_events, &event_tx, &priority_liquidation_tx).await {
                 error!("Error during event polling: {}", e);
                 // Continue polling even if one round fails
             }
@@ -128,6 +146,7 @@ async fn poll_for_events<P>(
     pool_address: Address,
     key_events: &[(&str, alloy_primitives::FixedBytes<32>)],
     event_tx: &mpsc::UnboundedSender<BotEvent>,
+    priority_liquidation_tx: &Option<mpsc::UnboundedSender<Address>>,
 ) -> Result<()>
 where
     P: Provider,
@@ -172,7 +191,7 @@ where
                 }
 
                 for log in logs {
-                    if let Err(e) = handle_log_event(log, event_tx).await {
+                    if let Err(e) = handle_log_event(log, event_tx, priority_liquidation_tx, provider, pool_address).await {
                         error!("Error handling {} event: {}", event_name, e);
                     }
                 }
@@ -203,7 +222,16 @@ where
     Ok(())
 }
 
-pub async fn handle_log_event(log: Log, event_tx: &mpsc::UnboundedSender<BotEvent>) -> Result<()> {
+pub async fn handle_log_event<P>(
+    log: Log, 
+    event_tx: &mpsc::UnboundedSender<BotEvent>,
+    priority_liquidation_tx: &Option<mpsc::UnboundedSender<Address>>,
+    provider: &Arc<P>,
+    pool_address: Address,
+) -> Result<()> 
+where
+    P: Provider,
+{
     // For now, extract user addresses from log topics manually
     // In Aave events, user addresses are typically in topic[1] or topic[2]
     let topics = log.topics();
@@ -236,9 +264,72 @@ pub async fn handle_log_event(log: Log, event_tx: &mpsc::UnboundedSender<BotEven
         }
     }
 
-    // Send events only for unique addresses to avoid duplicate update_user_position calls
+    // Process each unique user address
     for user_addr in user_addresses {
         debug!("Detected event for user: {}", user_addr);
+        
+        // WebSocket Fast Path: If priority liquidation channel is available, 
+        // immediately check user health and route liquidatable users to priority channel
+        if let Some(priority_tx) = priority_liquidation_tx {
+            // Check dedupe to avoid spamming priority channel
+            let current_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            
+            let dedupe_map = get_dedupe_map().await;
+            let should_check = {
+                let mut map = dedupe_map.write().await;
+                
+                // Clean up old entries (older than dedupe window)
+                map.retain(|_, &mut last_time| current_time - last_time < DEDUPE_WINDOW_SECS);
+                
+                // Check if we should process this user
+                if let Some(&last_time) = map.get(&user_addr) {
+                    if current_time - last_time < DEDUPE_WINDOW_SECS {
+                        false // Skip, too recent
+                    } else {
+                        map.insert(user_addr, current_time);
+                        true
+                    }
+                } else {
+                    map.insert(user_addr, current_time);
+                    true
+                }
+            };
+            
+            if should_check {
+                debug!("⚡ Fast path: checking health for user: {}", user_addr);
+                
+                // Immediately check user health with retries
+                match scanner::check_user_health(provider, pool_address, user_addr, 3).await {
+                    Ok(position) => {
+                        // If user is liquidatable (HF < 1.0 and has debt), send to priority channel
+                        if position.health_factor < U256::from(1000000000000000000u64) // 1.0 * 1e18
+                            && position.total_debt_base > U256::ZERO 
+                        {
+                            info!("⚡ Fast path liquidation detected for user: {:?} (HF: {})", 
+                                  user_addr, position.health_factor);
+                            
+                            if let Err(e) = priority_tx.send(user_addr) {
+                                warn!("Failed to send fast path liquidation for user {:?}: {}", user_addr, e);
+                            }
+                        } else {
+                            debug!("Fast path: user {:?} not liquidatable (HF: {}, debt: {})", 
+                                   user_addr, position.health_factor, position.total_debt_base);
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Fast path health check failed for user {:?}: {}", user_addr, e);
+                        // Continue to regular processing
+                    }
+                }
+            } else {
+                debug!("Fast path: skipping user {:?} due to dedupe window", user_addr);
+            }
+        }
+        
+        // Always enqueue UserPositionChanged for bookkeeping (normal processing)
         let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr));
     }
 
