@@ -3,8 +3,6 @@ use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use alloy_signer_local::PrivateKeySigner;
 use eyre::Result;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hasher;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -99,29 +97,14 @@ where
             alloy_dyn_abi::DynSolValue::Uint(U256::from(params.debt_asset_id), 16),
         ];
 
-        // Create transaction request
+        // Build contract call
         let call = self.liquidator_contract.function("liquidate", &args)?;
-        let _tx_req = call.into_transaction_request();
 
-        // Get gas price for logging
-        let gas_price_u128 = self.provider.get_gas_price().await?;
+        // Submit the transaction via provider with attached signer
+        let pending = call.send().await?;
+        let tx_hash = format!("{:#x}", pending.tx_hash());
 
-        // For now, let's create the transaction bytes directly
-        // TODO: Implement proper transaction signing when alloy APIs are clearer
-        warn!("🚧 Transaction signing implementation needed");
-        warn!(
-            "Would execute liquidation with gas price: {}",
-            gas_price_u128 * 2
-        );
-        warn!(
-            "Parameters: user={}, collateral={}, debt={}, amount={}",
-            params.user, params.collateral_asset, params.debt_asset, params.debt_to_cover
-        );
-
-        // Return a mock transaction hash for now
-        let mock_tx_hash = format!("0x{:064x}", DefaultHasher::new().finish());
-
-        Ok(mock_tx_hash)
+        Ok(tx_hash)
     }
 
     /// Wait for transaction confirmation

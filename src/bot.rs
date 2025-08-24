@@ -138,7 +138,7 @@ where
             )
             .await;
 
-            let liquidation_succeeded = liquidation_result.is_ok();
+            let liquidation_succeeded = matches!(liquidation_result, Ok(Some(_)));
 
             // Handle liquidation failure with fallback
             if let Err(e) = liquidation_result {
@@ -431,7 +431,7 @@ where
                     )
                     .await;
 
-                    let liquidation_succeeded = liquidation_result.is_ok();
+                    let liquidation_succeeded = matches!(liquidation_result, Ok(Some(_)));
 
                     // Handle liquidation failure with fallback
                     if let Err(e) = liquidation_result {

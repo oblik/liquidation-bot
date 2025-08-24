@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
     let signer: PrivateKeySigner = config.private_key.parse()?;
     info!("Signer created from private key");
 
-    // Build HTTP provider
+    // Build HTTP provider with signer attached for transaction sending
     let url = url::Url::parse(&config.rpc_url)?;
     let provider = ProviderBuilder::new().on_http(url).boxed();
     let provider = Arc::new(provider);
