@@ -148,3 +148,14 @@ pub struct GasEstimate {
     pub gas_limit: U256,
     pub total_cost: U256,
 }
+
+/// Result of a liquidation attempt, distinguishing between different outcomes
+#[derive(Debug, Clone)]
+pub enum LiquidationResult {
+    /// Liquidation was executed successfully with the given transaction hash
+    Executed(String),
+    /// No liquidation was needed for the given reason
+    NotNeeded(String),
+    /// Liquidation failed with an error
+    Failed(String),
+}

@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use super::{assets, executor, profitability};
 use crate::database;
-use crate::models::{LiquidationAssetConfig, LiquidationOpportunity, UserPosition};
+use crate::models::{LiquidationAssetConfig, LiquidationOpportunity, LiquidationResult, UserPosition};
 
 /// Find the most profitable liquidation pair by simulating all viable combinations
 async fn find_most_profitable_liquidation_pair<P>(
@@ -227,7 +227,7 @@ pub async fn handle_liquidation_opportunity<P>(
     signer: Option<alloy_signer_local::PrivateKeySigner>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     asset_configs: &std::collections::HashMap<Address, LiquidationAssetConfig>,
-) -> Result<()>
+) -> Result<LiquidationResult>
 where
     P: Provider + 'static,
 {
@@ -261,7 +261,7 @@ where
                 }
             }
 
-            return Ok(());
+            return Ok(LiquidationResult::NotNeeded("User position not found in database".to_string()));
         }
         Err(e) => {
             error!("Failed to get user position: {}", e);
@@ -289,12 +289,12 @@ where
             "User {:?} has no collateral assets - cannot liquidate",
             user
         );
-        return Ok(());
+        return Ok(LiquidationResult::NotNeeded("User has no collateral assets".to_string()));
     }
 
     if user_debt_assets.is_empty() {
         warn!("User {:?} has no debt assets - nothing to liquidate", user);
-        return Ok(());
+        return Ok(LiquidationResult::NotNeeded("User has no debt assets".to_string()));
     }
 
     // Find the most profitable liquidation pair by simulating all viable combinations
@@ -311,7 +311,7 @@ where
         Some(opp) => opp,
         None => {
             warn!("No profitable liquidation pair found for user: {:?}", user);
-            return Ok(());
+            return Ok(LiquidationResult::NotNeeded("No profitable liquidation pair found".to_string()));
         }
     };
 
@@ -330,7 +330,7 @@ where
         )
         .await?;
 
-        return Ok(());
+        return Ok(LiquidationResult::NotNeeded("Liquidation rejected - not profitable enough".to_string()));
     }
 
     info!("✅ Liquidation opportunity validated - proceeding with execution");
@@ -371,6 +371,8 @@ where
 
                     // Save liquidation record
                     save_liquidation_record(db_pool, &opportunity, &tx_hash).await?;
+
+                    return Ok(LiquidationResult::Executed(tx_hash));
                 }
                 Err(e) => {
                     error!("Failed to execute liquidation: {}", e);
@@ -413,7 +415,7 @@ where
                         );
                     }
 
-                    return Err(e);
+                    return Ok(LiquidationResult::Failed(format!("Liquidation execution failed: {}", e)));
                 }
             }
         }
@@ -435,10 +437,13 @@ where
                 )),
             )
             .await?;
+
+            return Ok(LiquidationResult::NotNeeded("Missing liquidator contract or signer - simulation only".to_string()));
         }
     }
 
-    Ok(())
+    // This should never be reached due to the match above, but just in case
+    Ok(LiquidationResult::NotNeeded("Unexpected code path".to_string()))
 }
 
 /// Get user position from database
@@ -501,7 +506,7 @@ pub async fn handle_liquidation_opportunity_legacy(
     _db_pool: &DatabasePool,
     user: Address,
     min_profit_threshold: U256,
-) -> Result<()> {
+) -> Result<LiquidationResult> {
     warn!("Using legacy liquidation handler - functionality limited");
 
     // Log the opportunity (using info! macro instead of database logging)
@@ -514,5 +519,5 @@ pub async fn handle_liquidation_opportunity_legacy(
     info!("⚠️  Enhanced liquidation execution requires provider and signer");
     info!("💰 Minimum profit threshold: {} wei", min_profit_threshold);
 
-    Ok(())
+    Ok(LiquidationResult::NotNeeded("Legacy handler - no execution capability".to_string()))
 }

@@ -2,9 +2,10 @@ use alloy_contract::{ContractInstance, Interface};
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use alloy_signer_local::PrivateKeySigner;
+use alloy_signer::Signer;
+use alloy_network::{TransactionBuilder, EthereumWallet};
+use alloy_rpc_types::TransactionRequest;
 use eyre::Result;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hasher;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -84,7 +85,7 @@ where
     /// Call the liquidate function on the smart contract
     async fn call_liquidate_function(&self, params: &LiquidationParams) -> Result<String> {
         info!(
-            "Calling liquidate function with params: user={}, collateral={}, debt={}, amount={}",
+            "Executing liquidation transaction with params: user={}, collateral={}, debt={}, amount={}",
             params.user, params.collateral_asset, params.debt_asset, params.debt_to_cover
         );
 
@@ -101,27 +102,42 @@ where
 
         // Create transaction request
         let call = self.liquidator_contract.function("liquidate", &args)?;
-        let _tx_req = call.into_transaction_request();
+        let mut tx_req = call.into_transaction_request();
 
-        // Get gas price for logging
-        let gas_price_u128 = self.provider.get_gas_price().await?;
+        // Get current gas price and apply multiplier for faster execution
+        let base_gas_price = self.provider.get_gas_price().await?;
+        let gas_price_with_multiplier = base_gas_price * 2; // 2x multiplier for priority
 
-        // For now, let's create the transaction bytes directly
-        // TODO: Implement proper transaction signing when alloy APIs are clearer
-        warn!("🚧 Transaction signing implementation needed");
-        warn!(
-            "Would execute liquidation with gas price: {}",
-            gas_price_u128 * 2
+        // Set gas parameters
+        tx_req = tx_req.with_gas_price(gas_price_with_multiplier);
+        
+        // Estimate gas limit
+        let gas_estimate = self.provider.estimate_gas(&tx_req).await?;
+        tx_req = tx_req.with_gas_limit(gas_estimate);
+
+        // Get nonce for the signer address
+        let signer_address = self.signer.address();
+        let nonce = self.provider.get_transaction_count(signer_address).await?;
+        tx_req = tx_req.with_nonce(nonce);
+
+        // Set the from address
+        tx_req = tx_req.with_from(signer_address);
+
+        info!(
+            "Submitting liquidation transaction with gas price: {} wei, gas limit: {}, nonce: {}",
+            gas_price_with_multiplier, gas_estimate, nonce
         );
-        warn!(
-            "Parameters: user={}, collateral={}, debt={}, amount={}",
-            params.user, params.collateral_asset, params.debt_asset, params.debt_to_cover
-        );
 
-        // Return a mock transaction hash for now
-        let mock_tx_hash = format!("0x{:064x}", DefaultHasher::new().finish());
+        // Sign the transaction
+        let signed_tx = self.signer.sign_transaction(&tx_req).await?;
 
-        Ok(mock_tx_hash)
+        // Submit the signed transaction to the network
+        let pending_tx = self.provider.send_raw_transaction(&signed_tx).await?;
+        let tx_hash = format!("{:?}", pending_tx.tx_hash());
+
+        info!("✅ Liquidation transaction submitted successfully: {}", tx_hash);
+
+        Ok(tx_hash)
     }
 
     /// Wait for transaction confirmation
