@@ -45,6 +45,8 @@ pub struct BotConfig {
     pub circuit_breaker_cooldown_secs: u64, // Time to wait before resuming operations after circuit breaker activation
     pub min_gas_price_multiplier: u64, // Minimum gas price multiplier to consider extreme conditions
     pub max_gas_price_multiplier: u64, // Maximum gas price multiplier to trigger circuit breaker
+    // Fast path controls
+    pub ws_fast_path: bool, // Enable WS fast path to priority liquidation channel
 }
 
 impl BotConfig {
@@ -325,6 +327,12 @@ impl BotConfig {
             Err(_) => 5,
         };
 
+        // WS fast path flag (default true)
+        let ws_fast_path = match std::env::var("WS_FAST_PATH") {
+            Ok(value) => value.parse::<bool>().unwrap_or(true),
+            Err(_) => true,
+        };
+
         Ok(Self {
             rpc_url,
             ws_url,
@@ -349,6 +357,7 @@ impl BotConfig {
             circuit_breaker_cooldown_secs,
             min_gas_price_multiplier,
             max_gas_price_multiplier,
+            ws_fast_path,
         })
     }
 }

@@ -382,6 +382,7 @@ where
                         user,
                         None,
                         None,
+                        None,
                     ).await {
                         warn!("Failed to update user position after liquidation failure: {}", update_err);
                     } else {

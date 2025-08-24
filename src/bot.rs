@@ -44,6 +44,9 @@ pub struct LiquidationBot<P> {
     liquidator_contract_address: Option<Address>,
     // Circuit breaker for extreme market conditions
     circuit_breaker: Arc<CircuitBreaker>,
+    // High-priority liquidation pipeline
+    priority_liquidation_tx: mpsc::UnboundedSender<Address>,
+    priority_liquidation_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Address>>>,
 }
 
 impl<P> LiquidationBot<P>
@@ -124,6 +127,9 @@ where
 
         // Create event channels for internal communication
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+
+        // Create high-priority liquidation channel
+        let (priority_liquidation_tx, priority_liquidation_rx) = mpsc::unbounded_channel();
 
         // Initialize asset configurations for Base Sepolia
         let asset_configs = oracle::init_asset_configs();
@@ -232,6 +238,8 @@ where
             liquidation_assets,
             liquidator_contract_address,
             circuit_breaker,
+            priority_liquidation_tx,
+            priority_liquidation_rx: Arc::new(tokio::sync::Mutex::new(priority_liquidation_rx)),
         })
     }
 
@@ -258,6 +266,7 @@ where
                         user,
                         Some(self.users_by_collateral.clone()),
                         Some(&self.asset_configs),
+                        Some(&self.priority_liquidation_tx),
                     )
                     .await
                     {
@@ -405,6 +414,41 @@ where
         Ok(())
     }
 
+    /// Dedicated processor for the high-priority liquidation channel
+    async fn run_liquidation_processor(&self) -> Result<()> {
+        info!("Starting priority liquidation processor...");
+
+        let mut rx = self.priority_liquidation_rx.lock().await;
+
+        while let Some(user) = rx.recv().await {
+            // Circuit breaker gate
+            let state_before = self.circuit_breaker.get_state();
+            if !self.circuit_breaker.is_liquidation_allowed() {
+                warn!(
+                    "🚫 Priority liquidation blocked by circuit breaker (state: {:?}) for user: {:?}",
+                    state_before, user
+                );
+                self.circuit_breaker.record_blocked_liquidation();
+                if let Err(e) = self
+                    .circuit_breaker
+                    .record_liquidation_attempt(false, None)
+                    .await
+                {
+                    warn!("Failed to record blocked priority liquidation: {}", e);
+                }
+                continue;
+            }
+
+            // Forward to existing liquidation handler by emitting BotEvent::LiquidationOpportunity
+            // This preserves accounting and fallback behavior
+            if let Err(e) = self.event_tx.send(BotEvent::LiquidationOpportunity(user)) {
+                warn!("Failed to enqueue liquidation opportunity from priority processor: {}", e);
+            }
+        }
+
+        Ok(())
+    }
+
     async fn handle_oracle_price_change(
         &self,
         asset_address: Address,
@@ -543,6 +587,9 @@ where
                 self.ws_provider.clone(),
                 &self.config.ws_url,
                 self.event_tx.clone(),
+                // Pass optional priority sender for fast path
+                Some(self.priority_liquidation_tx.clone()),
+                self.config.ws_fast_path,
             ),
             oracle::start_oracle_monitoring(
                 self.provider.clone(),
@@ -553,6 +600,7 @@ where
                 self.price_feeds.clone(),
             ),
             self.run_event_processor(),
+            self.run_liquidation_processor(),
             scanner::run_periodic_scan(
                 self.provider.clone(),
                 pool_address,
@@ -561,6 +609,8 @@ where
                 self.config.clone(),
                 self.asset_configs.clone(),
                 self.user_positions.clone(), // Add user_positions parameter
+                // Provide priority sender to scanner for immediate routing
+                Some(self.priority_liquidation_tx.clone()),
             ),
             scanner::start_status_reporter(self.db_pool.clone(), self.user_positions.clone(),),
             self.circuit_breaker.run_alert_processor(),

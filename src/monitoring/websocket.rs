@@ -27,6 +27,8 @@ pub async fn start_event_monitoring<P>(
     ws_provider: Arc<dyn Provider>,
     ws_url: &str,
     event_tx: mpsc::UnboundedSender<BotEvent>,
+    priority_tx: Option<mpsc::UnboundedSender<Address>>,
+    ws_fast_path: bool,
 ) -> Result<()>
 where
     P: Provider + 'static,
@@ -41,7 +43,7 @@ where
 
         // Instead of exiting early, start polling-based event monitoring
         info!("🔄 Starting getLogs-based polling for continuous event discovery...");
-        return start_polling_event_monitoring(provider, event_tx).await;
+        return start_polling_event_monitoring(provider, event_tx, priority_tx.clone(), ws_fast_path).await;
     }
 
     info!("🚀 Starting real-time WebSocket event monitoring...");
@@ -68,7 +70,7 @@ where
         info!("🎧 Listening for real-time Aave events...");
 
         while let Some(log) = stream.next().await {
-            if let Err(e) = handle_log_event(log, &event_tx).await {
+            if let Err(e) = handle_log_event(log, &event_tx, priority_tx.as_ref(), ws_fast_path, &provider, pool_address).await {
                 error!("Error handling log event: {}", e);
             }
         }
@@ -82,6 +84,8 @@ where
 async fn start_polling_event_monitoring<P>(
     provider: Arc<P>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
+    priority_tx: Option<mpsc::UnboundedSender<Address>>,
+    ws_fast_path: bool,
 ) -> Result<()>
 where
     P: Provider + 'static,
@@ -111,7 +115,7 @@ where
         loop {
             poll_interval.tick().await;
 
-            if let Err(e) = poll_for_events(&provider, pool_address, &key_events, &event_tx).await {
+            if let Err(e) = poll_for_events(&provider, pool_address, &key_events, &event_tx, priority_tx.as_ref(), ws_fast_path).await {
                 error!("Error during event polling: {}", e);
                 // Continue polling even if one round fails
             }
@@ -128,6 +132,8 @@ async fn poll_for_events<P>(
     pool_address: Address,
     key_events: &[(&str, alloy_primitives::FixedBytes<32>)],
     event_tx: &mpsc::UnboundedSender<BotEvent>,
+    priority_tx: Option<&mpsc::UnboundedSender<Address>>,
+    ws_fast_path: bool,
 ) -> Result<()>
 where
     P: Provider,
@@ -172,7 +178,7 @@ where
                 }
 
                 for log in logs {
-                    if let Err(e) = handle_log_event(log, event_tx).await {
+                    if let Err(e) = handle_log_event(log, event_tx, priority_tx, ws_fast_path, provider, pool_address).await {
                         error!("Error handling {} event: {}", event_name, e);
                     }
                 }
@@ -203,7 +209,17 @@ where
     Ok(())
 }
 
-pub async fn handle_log_event(log: Log, event_tx: &mpsc::UnboundedSender<BotEvent>) -> Result<()> {
+pub async fn handle_log_event<P>(
+    log: Log,
+    event_tx: &mpsc::UnboundedSender<BotEvent>,
+    priority_tx: Option<&mpsc::UnboundedSender<Address>>,
+    ws_fast_path: bool,
+    provider: &Arc<P>,
+    pool_address: Address,
+) -> Result<()>
+where
+    P: Provider,
+{
     // For now, extract user addresses from log topics manually
     // In Aave events, user addresses are typically in topic[1] or topic[2]
     let topics = log.topics();
@@ -236,10 +252,32 @@ pub async fn handle_log_event(log: Log, event_tx: &mpsc::UnboundedSender<BotEven
         }
     }
 
-    // Send events only for unique addresses to avoid duplicate update_user_position calls
+    // Optional: WS fast path directly to priority channel if user is liquidatable
+    // Use a short-lived dedupe to avoid duplicate pushes; here we rely on HashSet per log
     for user_addr in user_addresses {
         debug!("Detected event for user: {}", user_addr);
+
+        // Always enqueue bookkeeping event
         let _ = event_tx.send(BotEvent::UserPositionChanged(user_addr));
+
+        if ws_fast_path {
+            if let Some(tx) = priority_tx {
+                // Quick check: query user health synchronously with small retries=1 for speed
+                match crate::monitoring::scanner::check_user_health(provider, pool_address, user_addr, 1).await {
+                    Ok(position) => {
+                        if position.health_factor < alloy_primitives::U256::from(1000000000000000000u64)
+                            && position.total_debt_base > alloy_primitives::U256::ZERO
+                        {
+                            debug!("⚡ WS fast path: pushing {:?} to priority liquidation channel", user_addr);
+                            let _ = tx.send(user_addr);
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Fast path health check failed for {:?}: {}", user_addr, e);
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
