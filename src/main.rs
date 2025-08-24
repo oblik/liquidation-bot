@@ -23,9 +23,24 @@ async fn main() -> Result<()> {
     let signer: PrivateKeySigner = config.private_key.parse()?;
     info!("Signer created from private key");
 
-    // Build HTTP provider
+    // Build HTTP provider with authentication for DRPC
     let url = url::Url::parse(&config.rpc_url)?;
-    let provider = ProviderBuilder::new().on_http(url).boxed();
+    let mut provider_builder = ProviderBuilder::new();
+    
+    // Add authentication headers for DRPC
+    if config.rpc_url.contains("drpc.org") {
+        // Extract the API key from the URL path
+        if let Some(api_key_start) = config.rpc_url.rfind('/') {
+            let api_key = &config.rpc_url[api_key_start + 1..];
+            if !api_key.is_empty() {
+                // Add Authorization header with the API key
+                provider_builder = provider_builder.with_header("Authorization", format!("Bearer {}", api_key));
+                info!("Added DRPC authentication header for HTTP connection");
+            }
+        }
+    }
+    
+    let provider = provider_builder.on_http(url).boxed();
     let provider = Arc::new(provider);
     info!("HTTP Provider connected to: {}", config.rpc_url);
 

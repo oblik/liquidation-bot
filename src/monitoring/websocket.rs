@@ -17,7 +17,21 @@ use crate::models::{Borrow, Repay, Supply, Withdraw};
 static LAST_PROCESSED_BLOCK: AtomicU64 = AtomicU64::new(0);
 
 pub async fn try_connect_websocket(ws_url: &str) -> Result<Arc<dyn Provider>> {
-    let ws_connect = WsConnect::new(ws_url.to_string());
+    let mut ws_connect = WsConnect::new(ws_url.to_string());
+    
+    // Add authentication headers for DRPC
+    if ws_url.contains("drpc.org") {
+        // Extract the API key from the URL path
+        if let Some(api_key_start) = ws_url.rfind('/') {
+            let api_key = &ws_url[api_key_start + 1..];
+            if !api_key.is_empty() {
+                // Add Authorization header with the API key
+                ws_connect = ws_connect.with_header("Authorization", format!("Bearer {}", api_key));
+                info!("Added DRPC authentication header for WebSocket connection");
+            }
+        }
+    }
+    
     let ws_provider = ProviderBuilder::new().on_ws(ws_connect).await?;
     Ok(Arc::new(ws_provider.boxed()))
 }
