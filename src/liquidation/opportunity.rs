@@ -227,7 +227,7 @@ pub async fn handle_liquidation_opportunity<P>(
     signer: Option<alloy_signer_local::PrivateKeySigner>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     asset_configs: &std::collections::HashMap<Address, LiquidationAssetConfig>,
-) -> Result<()>
+) -> Result<Option<String>>
 where
     P: Provider + 'static,
 {
@@ -261,7 +261,7 @@ where
                 }
             }
 
-            return Ok(());
+            return Ok(None);
         }
         Err(e) => {
             error!("Failed to get user position: {}", e);
@@ -289,12 +289,12 @@ where
             "User {:?} has no collateral assets - cannot liquidate",
             user
         );
-        return Ok(());
+        return Ok(None);
     }
 
     if user_debt_assets.is_empty() {
         warn!("User {:?} has no debt assets - nothing to liquidate", user);
-        return Ok(());
+        return Ok(None);
     }
 
     // Find the most profitable liquidation pair by simulating all viable combinations
@@ -311,7 +311,7 @@ where
         Some(opp) => opp,
         None => {
             warn!("No profitable liquidation pair found for user: {:?}", user);
-            return Ok(());
+            return Ok(None);
         }
     };
 
@@ -330,7 +330,7 @@ where
         )
         .await?;
 
-        return Ok(());
+        return Ok(None);
     }
 
     info!("✅ Liquidation opportunity validated - proceeding with execution");
@@ -371,6 +371,8 @@ where
 
                     // Save liquidation record
                     save_liquidation_record(db_pool, &opportunity, &tx_hash).await?;
+
+                    return Ok(Some(tx_hash));
                 }
                 Err(e) => {
                     error!("Failed to execute liquidation: {}", e);
@@ -438,7 +440,7 @@ where
         }
     }
 
-    Ok(())
+    Ok(None)
 }
 
 /// Get user position from database

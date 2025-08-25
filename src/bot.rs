@@ -138,7 +138,7 @@ where
             )
             .await;
 
-            let liquidation_succeeded = liquidation_result.is_ok();
+            let liquidation_succeeded = matches!(liquidation_result, Ok(Some(_)));
 
             // Handle liquidation failure with fallback
             if let Err(e) = liquidation_result {
@@ -157,8 +157,10 @@ where
                 {
                     error!("Legacy liquidation handler also failed for priority liquidation: {}", legacy_err);
                 }
+            } else if let Ok(Some(tx)) = liquidation_result {
+                info!("✅ Priority liquidation executed successfully for user: {:?} tx: {}", user_address, tx);
             } else {
-                info!("✅ Priority liquidation executed successfully for user: {:?}", user_address);
+                info!("ℹ️ Priority liquidation not executed (no-op) for user: {:?}", user_address);
             }
 
             // Record ALL liquidation attempts (both successful and failed) for frequency monitoring
@@ -431,7 +433,7 @@ where
                     )
                     .await;
 
-                    let liquidation_succeeded = liquidation_result.is_ok();
+                    let liquidation_succeeded = matches!(liquidation_result, Ok(Some(_)));
 
                     // Handle liquidation failure with fallback
                     if let Err(e) = liquidation_result {
@@ -450,6 +452,10 @@ where
                         {
                             error!("Legacy liquidation handler also failed: {}", legacy_err);
                         }
+                    } else if let Ok(Some(tx)) = liquidation_result {
+                        info!("✅ Liquidation executed successfully for user: {:?} tx: {}", user, tx);
+                    } else {
+                        info!("ℹ️ Liquidation not executed (no-op) for user: {:?}", user);
                     }
 
                     // Record ALL liquidation attempts (both successful and failed) for frequency monitoring
