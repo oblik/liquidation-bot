@@ -383,6 +383,7 @@ pub async fn update_user_position<P>(
     user: Address,
     users_by_collateral: Option<Arc<DashMap<Address, HashSet<Address>>>>,
     asset_configs: Option<&HashMap<Address, AssetConfig>>,
+    priority_liquidation_tx: Option<mpsc::UnboundedSender<Address>>,
 ) -> Result<()>
 where
     P: Provider,
@@ -453,11 +454,25 @@ where
                 && position.health_factor < U256::from(LIQUIDATION_THRESHOLD)
                 && position.total_debt_base > U256::ZERO
             {
-                debug!(
-                    "🎯 Sending liquidation opportunity event for user: {:?}",
-                    user
-                );
-                let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
+                // Send to priority channel if available (for immediate processing)
+                if let Some(priority_tx) = &priority_liquidation_tx {
+                    debug!(
+                        "⚡ Sending priority liquidation for user: {:?}",
+                        user
+                    );
+                    if let Err(e) = priority_tx.send(user) {
+                        warn!("Failed to send priority liquidation for user {:?}: {}", user, e);
+                        // Fallback to regular event queue
+                        let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
+                    }
+                } else {
+                    // Use regular event queue if priority channel not available
+                    debug!(
+                        "🎯 Sending liquidation opportunity event for user: {:?}",
+                        user
+                    );
+                    let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
+                }
             }
 
             // Check if position became at-risk
@@ -559,7 +574,8 @@ pub async fn run_periodic_scan<P>(
     event_tx: mpsc::UnboundedSender<BotEvent>,
     config: BotConfig,
     _asset_configs: HashMap<Address, AssetConfig>,
-    user_positions: Arc<DashMap<Address, UserPosition>>, // Add user_positions parameter
+    user_positions: Arc<DashMap<Address, UserPosition>>,
+    priority_liquidation_tx: Option<mpsc::UnboundedSender<Address>>,
 ) -> Result<()>
 where
     P: Provider,
@@ -677,9 +693,21 @@ where
 
                 // Only send liquidation opportunity if user is actually liquidatable (HF < 1.0)
                 if position.health_factor < U256::from(LIQUIDATION_THRESHOLD) && position.total_debt_base > U256::ZERO {
-                    info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
-                    if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
-                        warn!("Failed to send liquidation opportunity: {}", e);
+                    // Send to priority channel if available (for immediate processing)
+                    if let Some(priority_tx) = &priority_liquidation_tx {
+                        info!("⚡ User {:?} is LIQUIDATABLE (HF < 1.0) - sending priority liquidation", user.address);
+                        if let Err(e) = priority_tx.send(user.address) {
+                            warn!("Failed to send priority liquidation for user {:?}: {}", user.address, e);
+                            // Fallback to regular event queue
+                            if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                warn!("Failed to send liquidation opportunity fallback: {}", e);
+                            }
+                        }
+                    } else {
+                        info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
+                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                            warn!("Failed to send liquidation opportunity: {}", e);
+                        }
                     }
                 } else if position.health_factor < U256::from(CRITICAL_THRESHOLD) {
                     debug!("User {:?} is at-risk but NOT liquidatable yet (HF: {} >= 1.0)", user.address, format_health_factor(position.health_factor));
@@ -751,9 +779,21 @@ where
                                 // Send liquidation opportunity for ANY user that is actually liquidatable (HF < 1.0)
                                 // regardless of whether they're newly at-risk or not
                                 if position.health_factor < U256::from(LIQUIDATION_THRESHOLD) && position.total_debt_base > U256::ZERO {
-                                    info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
-                                    if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
-                                        warn!("Failed to send liquidation opportunity: {}", e);
+                                    // Send to priority channel if available (for immediate processing)
+                                    if let Some(priority_tx) = &priority_liquidation_tx {
+                                        info!("⚡ User {:?} is LIQUIDATABLE (HF < 1.0) - sending priority liquidation (full rescan)", user.address);
+                                        if let Err(e) = priority_tx.send(user.address) {
+                                            warn!("Failed to send priority liquidation for user {:?}: {}", user.address, e);
+                                            // Fallback to regular event queue
+                                            if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                                warn!("Failed to send liquidation opportunity fallback: {}", e);
+                                            }
+                                        }
+                                    } else {
+                                        info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
+                                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                            warn!("Failed to send liquidation opportunity: {}", e);
+                                        }
                                     }
                                 } else if position.health_factor < U256::from(CRITICAL_THRESHOLD) {
                                     debug!("User {:?} is at-risk but NOT liquidatable yet (HF: {} >= 1.0)", user.address, format_health_factor(position.health_factor));

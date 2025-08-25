@@ -1060,6 +1060,7 @@ mod tests {
             circuit_breaker_cooldown_secs: 5, // Short cooldown for testing
             min_gas_price_multiplier: 1,
             max_gas_price_multiplier: 3, // Low threshold for testing
+            ws_fast_path_enabled: true,  // Enable fast path for testing
         }
     }
 

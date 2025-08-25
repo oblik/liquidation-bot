@@ -35,6 +35,9 @@ pub struct LiquidationBot<P> {
     processing_users: Arc<SyncRwLock<HashSet<Address>>>,
     event_tx: mpsc::UnboundedSender<BotEvent>,
     event_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<BotEvent>>>,
+    // High-priority liquidation pipeline
+    priority_liquidation_tx: mpsc::UnboundedSender<Address>,
+    priority_liquidation_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Address>>>,
     // Oracle price monitoring
     price_feeds: Arc<DashMap<Address, PriceFeed>>,
     asset_configs: HashMap<Address, AssetConfig>,
@@ -76,6 +79,111 @@ where
     /// Re-enable circuit breaker after manual disable
     pub async fn enable_circuit_breaker(&self) -> Result<()> {
         self.circuit_breaker.enable().await
+    }
+
+    /// Run high-priority liquidation processor
+    async fn run_liquidation_processor(&self) -> Result<()> {
+        info!("🚀 Starting high-priority liquidation processor...");
+        
+        let mut priority_rx = self.priority_liquidation_rx.lock().await;
+        
+        while let Some(user_address) = priority_rx.recv().await {
+            info!("⚡ Processing priority liquidation for user: {:?}", user_address);
+            
+            // Check circuit breaker before processing liquidation
+            // IMPORTANT: Capture state BEFORE liquidation to avoid TOCTOU bug
+            let circuit_breaker_state_before = self.circuit_breaker.get_state();
+
+            if !self.circuit_breaker.is_liquidation_allowed() {
+                warn!(
+                    "🚫 Priority liquidation blocked by circuit breaker (state: {:?}) for user: {:?}",
+                    circuit_breaker_state_before, user_address
+                );
+                self.circuit_breaker.record_blocked_liquidation();
+
+                // Record the blocked attempt for frequency monitoring
+                if let Err(e) = self
+                    .circuit_breaker
+                    .record_liquidation_attempt(false, None)
+                    .await
+                {
+                    warn!("Failed to record blocked priority liquidation attempt: {}", e);
+                }
+                continue;
+            }
+
+            // Determine if this is a test liquidation based on state BEFORE execution
+            let is_test_liquidation = circuit_breaker_state_before
+                == crate::circuit_breaker::CircuitBreakerState::HalfOpen;
+
+            // Get current gas price for circuit breaker monitoring
+            let current_gas_price = match self.provider.get_gas_price().await {
+                Ok(price) => Some(alloy_primitives::U256::from(price)),
+                Err(e) => {
+                    warn!("Failed to get current gas price for priority liquidation: {}", e);
+                    None
+                }
+            };
+
+            // Execute liquidation first, then record success/failure
+            let liquidation_result = liquidation::handle_liquidation_opportunity(
+                self.provider.clone(),
+                &self.db_pool,
+                user_address,
+                self.config.min_profit_threshold,
+                self.liquidator_contract_address,
+                Some(self.signer.clone()),
+                &self.pool_contract,
+                &self.liquidation_assets,
+            )
+            .await;
+
+            let liquidation_succeeded = liquidation_result.is_ok();
+
+            // Handle liquidation failure with fallback
+            if let Err(e) = liquidation_result {
+                error!(
+                    "Failed to handle priority liquidation opportunity for {:?}: {}",
+                    user_address, e
+                );
+
+                // Fallback to legacy handler for logging
+                if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
+                    &self.db_pool,
+                    user_address,
+                    self.config.min_profit_threshold,
+                )
+                .await
+                {
+                    error!("Legacy liquidation handler also failed for priority liquidation: {}", legacy_err);
+                }
+            } else {
+                info!("✅ Priority liquidation executed successfully for user: {:?}", user_address);
+            }
+
+            // Record ALL liquidation attempts (both successful and failed) for frequency monitoring
+            if let Err(e) = self
+                .circuit_breaker
+                .record_liquidation_attempt(liquidation_succeeded, current_gas_price)
+                .await
+            {
+                warn!(
+                    "Failed to record priority liquidation attempt for circuit breaker: {}",
+                    e
+                );
+            }
+
+            // Record test liquidation if this was a half-open state test (determined before execution)
+            if is_test_liquidation && liquidation_succeeded {
+                self.circuit_breaker.record_test_liquidation();
+                info!(
+                    "📊 Recorded successful test liquidation (priority path, state was half-open before attempt) for user: {:?}",
+                    user_address
+                );
+            }
+        }
+        
+        Ok(())
     }
 
     /// Start periodic circuit breaker status reporting
@@ -124,6 +232,9 @@ where
 
         // Create event channels for internal communication
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        
+        // Create high-priority liquidation channels
+        let (priority_liquidation_tx, priority_liquidation_rx) = mpsc::unbounded_channel();
 
         // Initialize asset configurations for Base Sepolia
         let asset_configs = oracle::init_asset_configs();
@@ -224,6 +335,8 @@ where
             processing_users: Arc::new(SyncRwLock::new(HashSet::new())),
             event_tx,
             event_rx: Arc::new(tokio::sync::Mutex::new(event_rx)),
+            priority_liquidation_tx,
+            priority_liquidation_rx: Arc::new(tokio::sync::Mutex::new(priority_liquidation_rx)),
             // Oracle price monitoring
             price_feeds: Arc::new(DashMap::new()),
             asset_configs,
@@ -258,6 +371,7 @@ where
                         user,
                         Some(self.users_by_collateral.clone()),
                         Some(&self.asset_configs),
+                        None, // No priority channel for regular event processing to avoid double-processing
                     )
                     .await
                     {
@@ -536,13 +650,14 @@ where
             warn!("Failed to populate initial collateral mapping: {}", e);
         }
 
-        // Start all monitoring services including circuit breaker
+        // Start all monitoring services including circuit breaker and priority liquidation processor
         tokio::try_join!(
             websocket::start_event_monitoring(
                 self.provider.clone(),
                 self.ws_provider.clone(),
                 &self.config.ws_url,
                 self.event_tx.clone(),
+                if self.config.ws_fast_path_enabled { Some(self.priority_liquidation_tx.clone()) } else { None },
             ),
             oracle::start_oracle_monitoring(
                 self.provider.clone(),
@@ -553,6 +668,7 @@ where
                 self.price_feeds.clone(),
             ),
             self.run_event_processor(),
+            self.run_liquidation_processor(),
             scanner::run_periodic_scan(
                 self.provider.clone(),
                 pool_address,
@@ -560,7 +676,8 @@ where
                 self.event_tx.clone(),
                 self.config.clone(),
                 self.asset_configs.clone(),
-                self.user_positions.clone(), // Add user_positions parameter
+                self.user_positions.clone(),
+                if self.config.ws_fast_path_enabled { Some(self.priority_liquidation_tx.clone()) } else { None },
             ),
             scanner::start_status_reporter(self.db_pool.clone(), self.user_positions.clone(),),
             self.circuit_breaker.run_alert_processor(),

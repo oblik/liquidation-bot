@@ -1,9 +1,9 @@
+use crate::database::DatabasePool;
 use alloy_contract::ContractInstance;
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
-use eyre::Result;
-use crate::database::DatabasePool;
 use dashmap::DashMap;
+use eyre::Result;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
@@ -25,18 +25,18 @@ where
     P: Provider,
 {
     // Get all viable pairs
-    let viable_pairs = assets::get_all_viable_liquidation_pairs(
-        assets,
-        user_collateral_assets,
-        user_debt_assets,
-    );
+    let viable_pairs =
+        assets::get_all_viable_liquidation_pairs(assets, user_collateral_assets, user_debt_assets);
 
     if viable_pairs.is_empty() {
         debug!("No viable liquidation pairs found");
         return Ok(None);
     }
 
-    info!("🔍 Evaluating {} viable liquidation pairs for maximum profit", viable_pairs.len());
+    info!(
+        "🔍 Evaluating {} viable liquidation pairs for maximum profit",
+        viable_pairs.len()
+    );
 
     let mut best_opportunity: Option<LiquidationOpportunity> = None;
     let mut highest_profit = U256::ZERO;
@@ -46,11 +46,14 @@ where
         let collateral_asset = match assets::get_asset_config(assets, collateral_addr) {
             Some(config) => config,
             None => {
-                warn!("Collateral asset config not found for: {:?}", collateral_addr);
+                warn!(
+                    "Collateral asset config not found for: {:?}",
+                    collateral_addr
+                );
                 continue;
             }
         };
-        
+
         let debt_asset = match assets::get_asset_config(assets, debt_addr) {
             Some(config) => config,
             None => {
@@ -71,7 +74,9 @@ where
             collateral_asset,
             debt_asset,
             min_profit_threshold,
-        ).await {
+        )
+        .await
+        {
             Ok(opp) => opp,
             Err(e) => {
                 warn!(
@@ -101,8 +106,14 @@ where
     if let Some(ref opportunity) = best_opportunity {
         info!(
             "✅ Most profitable pair selected: {} -> {} (profit: {} wei)",
-            assets.get(&opportunity.collateral_asset).map(|a| a.symbol.as_str()).unwrap_or("Unknown"),
-            assets.get(&opportunity.debt_asset).map(|a| a.symbol.as_str()).unwrap_or("Unknown"),
+            assets
+                .get(&opportunity.collateral_asset)
+                .map(|a| a.symbol.as_str())
+                .unwrap_or("Unknown"),
+            assets
+                .get(&opportunity.debt_asset)
+                .map(|a| a.symbol.as_str())
+                .unwrap_or("Unknown"),
             opportunity.estimated_profit
         );
     } else {
@@ -236,10 +247,10 @@ where
         Ok(Some(position)) => {
             debug!("✅ Found user position in database for liquidation opportunity");
             position
-        },
+        }
         Ok(None) => {
             warn!("User position not found in database: {:?}", user);
-            
+
             // Debug: Check how many total users are in the database
             match crate::database::get_user_position_count(db_pool).await {
                 Ok(count) => {
@@ -249,7 +260,7 @@ where
                     error!("Failed to count database users: {}", e);
                 }
             }
-            
+
             return Ok(());
         }
         Err(e) => {
@@ -274,7 +285,10 @@ where
 
     // Validate that user has both collateral and debt
     if user_collateral_assets.is_empty() {
-        warn!("User {:?} has no collateral assets - cannot liquidate", user);
+        warn!(
+            "User {:?} has no collateral assets - cannot liquidate",
+            user
+        );
         return Ok(());
     }
 
@@ -291,7 +305,9 @@ where
         &user_debt_assets,
         &user_position,
         min_profit_threshold,
-    ).await? {
+    )
+    .await?
+    {
         Some(opp) => opp,
         None => {
             warn!("No profitable liquidation pair found for user: {:?}", user);
@@ -382,10 +398,19 @@ where
                         user,
                         None,
                         None,
-                    ).await {
-                        warn!("Failed to update user position after liquidation failure: {}", update_err);
+                        None, // No priority liquidation channel needed here
+                    )
+                    .await
+                    {
+                        warn!(
+                            "Failed to update user position after liquidation failure: {}",
+                            update_err
+                        );
                     } else {
-                        info!("Updated user position after failed liquidation for user: {}", user);
+                        info!(
+                            "Updated user position after failed liquidation for user: {}",
+                            user
+                        );
                     }
 
                     return Err(e);
@@ -422,8 +447,11 @@ async fn get_user_position_from_db(
     user: Address,
 ) -> Result<Option<UserPosition>> {
     let user_str = user.to_string();
-    
-    debug!("🔍 Looking up user in database: {} (formatted as: {})", user, user_str);
+
+    debug!(
+        "🔍 Looking up user in database: {} (formatted as: {})",
+        user, user_str
+    );
 
     // Try case-insensitive lookup to handle any format mismatches
     match crate::database::get_user_position(db_pool, user).await? {
@@ -462,7 +490,8 @@ async fn save_liquidation_record(
         &profit_str,
         Some(tx_hash),
         None,
-    ).await?;
+    )
+    .await?;
 
     Ok(())
 }
@@ -476,7 +505,10 @@ pub async fn handle_liquidation_opportunity_legacy(
     warn!("Using legacy liquidation handler - functionality limited");
 
     // Log the opportunity (using info! macro instead of database logging)
-    info!("🎯 Legacy liquidation opportunity detected for user: {:?}", user);
+    info!(
+        "🎯 Legacy liquidation opportunity detected for user: {:?}",
+        user
+    );
 
     info!("🎯 LIQUIDATION OPPORTUNITY DETECTED for user: {:?}", user);
     info!("⚠️  Enhanced liquidation execution requires provider and signer");
