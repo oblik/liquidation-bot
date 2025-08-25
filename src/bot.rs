@@ -138,27 +138,38 @@ where
             )
             .await;
 
-            let liquidation_succeeded = liquidation_result.is_ok();
+            let liquidation_succeeded = liquidation_result
+                .as_ref()
+                .map(|r| r.was_executed())
+                .unwrap_or(false);
 
-            // Handle liquidation failure with fallback
-            if let Err(e) = liquidation_result {
-                error!(
-                    "Failed to handle priority liquidation opportunity for {:?}: {}",
-                    user_address, e
-                );
-
-                // Fallback to legacy handler for logging
-                if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
-                    &self.db_pool,
-                    user_address,
-                    self.config.min_profit_threshold,
-                )
-                .await
-                {
-                    error!("Legacy liquidation handler also failed for priority liquidation: {}", legacy_err);
+            // Handle liquidation result
+            match liquidation_result {
+                Ok(result) => {
+                    if result.was_executed() {
+                        info!("✅ Priority liquidation executed successfully for user: {:?}, TX: {:?}", 
+                            user_address, result.tx_hash());
+                    } else {
+                        debug!("Priority liquidation not needed for user: {:?}", user_address);
+                    }
                 }
-            } else {
-                info!("✅ Priority liquidation executed successfully for user: {:?}", user_address);
+                Err(e) => {
+                    error!(
+                        "Failed to handle priority liquidation opportunity for {:?}: {}",
+                        user_address, e
+                    );
+
+                    // Fallback to legacy handler for logging
+                    if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
+                        &self.db_pool,
+                        user_address,
+                        self.config.min_profit_threshold,
+                    )
+                    .await
+                    {
+                        error!("Legacy liquidation handler also failed for priority liquidation: {}", legacy_err);
+                    }
+                }
             }
 
             // Record ALL liquidation attempts (both successful and failed) for frequency monitoring
@@ -431,24 +442,37 @@ where
                     )
                     .await;
 
-                    let liquidation_succeeded = liquidation_result.is_ok();
+                    let liquidation_succeeded = liquidation_result
+                .as_ref()
+                .map(|r| r.was_executed())
+                .unwrap_or(false);
 
-                    // Handle liquidation failure with fallback
-                    if let Err(e) = liquidation_result {
-                        error!(
-                            "Failed to handle liquidation opportunity for {:?}: {}",
-                            user, e
-                        );
+                    // Handle liquidation result
+                    match liquidation_result {
+                        Ok(result) => {
+                            if result.was_executed() {
+                                info!("✅ Liquidation executed successfully for user: {:?}, TX: {:?}", 
+                                    user, result.tx_hash());
+                            } else {
+                                debug!("Liquidation not needed for user: {:?}", user);
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to handle liquidation opportunity for {:?}: {}",
+                                user, e
+                            );
 
-                        // Fallback to legacy handler for logging
-                        if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
-                            &self.db_pool,
-                            user,
-                            self.config.min_profit_threshold,
-                        )
-                        .await
-                        {
-                            error!("Legacy liquidation handler also failed: {}", legacy_err);
+                            // Fallback to legacy handler for logging
+                            if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
+                                &self.db_pool,
+                                user,
+                                self.config.min_profit_threshold,
+                            )
+                            .await
+                            {
+                                error!("Legacy liquidation handler also failed: {}", legacy_err);
+                            }
                         }
                     }
 

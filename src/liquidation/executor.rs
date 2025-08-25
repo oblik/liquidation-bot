@@ -3,8 +3,7 @@ use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use alloy_signer_local::PrivateKeySigner;
 use eyre::Result;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hasher;
+
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -99,29 +98,69 @@ where
             alloy_dyn_abi::DynSolValue::Uint(U256::from(params.debt_asset_id), 16),
         ];
 
-        // Create transaction request
+        // Create the function call
         let call = self.liquidator_contract.function("liquidate", &args)?;
-        let _tx_req = call.into_transaction_request();
-
-        // Get gas price for logging
-        let gas_price_u128 = self.provider.get_gas_price().await?;
-
-        // For now, let's create the transaction bytes directly
-        // TODO: Implement proper transaction signing when alloy APIs are clearer
-        warn!("🚧 Transaction signing implementation needed");
-        warn!(
-            "Would execute liquidation with gas price: {}",
-            gas_price_u128 * 2
+        let tx_request = call.into_transaction_request();
+        
+        // Get current gas price and apply multiplier for priority
+        let gas_price = self.provider.get_gas_price().await?;
+        let priority_gas_price = gas_price * 2; // 2x gas for priority execution
+        
+        info!(
+            "📝 Preparing liquidation transaction with gas price: {} gwei",
+            priority_gas_price / U256::from(1_000_000_000)
         );
-        warn!(
+        info!(
             "Parameters: user={}, collateral={}, debt={}, amount={}",
             params.user, params.collateral_asset, params.debt_asset, params.debt_to_cover
         );
-
-        // Return a mock transaction hash for now
-        let mock_tx_hash = format!("0x{:064x}", DefaultHasher::new().finish());
-
-        Ok(mock_tx_hash)
+        
+        // IMPORTANT: Transaction Execution Implementation
+        // ==============================================
+        // This is where the actual transaction needs to be sent to the blockchain.
+        // The current implementation shows the structure but needs to be completed
+        // based on your specific alloy provider configuration.
+        
+        // Option 1: If using a provider with signer middleware (recommended)
+        // --------------------------------------------------------------------
+        // The provider should be created with the signer attached, like:
+        // let provider = ProviderBuilder::new()
+        //     .with_recommended_fillers()
+        //     .wallet(wallet)
+        //     .on_http(url);
+        // 
+        // Then you can send transactions directly:
+        // let pending_tx = call.send().await?;
+        // let receipt = pending_tx.get_receipt().await?;
+        
+        // Option 2: Manual transaction signing and sending
+        // -------------------------------------------------
+        // 1. Build the transaction request with all parameters
+        // 2. Sign it with the signer
+        // 3. Send the raw signed transaction
+        
+        // For demonstration, here's a placeholder that shows the transaction would be sent:
+        error!("🔴 CRITICAL: Transaction execution not fully implemented!");
+        error!("The liquidation transaction has been prepared but NOT sent to the blockchain.");
+        error!("To complete the implementation:");
+        error!("1. Configure the provider with signer middleware, OR");
+        error!("2. Implement manual transaction signing and sending");
+        error!("");
+        error!("Transaction details:");
+        error!("  Contract: {}", self.contract_address);
+        error!("  From: {}", self.signer.address());
+        error!("  Function: liquidate");
+        error!("  User: {}", params.user);
+        error!("  Collateral: {}", params.collateral_asset);
+        error!("  Debt: {}", params.debt_asset);
+        error!("  Amount: {}", params.debt_to_cover);
+        error!("  Gas Price: {} gwei", priority_gas_price / U256::from(1_000_000_000));
+        
+        // Return an error to prevent false positive liquidation tracking
+        Err(eyre::eyre!(
+            "Transaction execution not implemented. The liquidation bot is currently in dry-run mode. \
+            To enable actual liquidations, complete the transaction sending implementation in executor.rs"
+        ))
     }
 
     /// Wait for transaction confirmation

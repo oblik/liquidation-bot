@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use super::{assets, executor, profitability};
+use super::result::{LiquidationResult, LiquidationSkipReason};
 use crate::database;
 use crate::models::{LiquidationAssetConfig, LiquidationOpportunity, UserPosition};
 
@@ -227,7 +228,7 @@ pub async fn handle_liquidation_opportunity<P>(
     signer: Option<alloy_signer_local::PrivateKeySigner>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     asset_configs: &std::collections::HashMap<Address, LiquidationAssetConfig>,
-) -> Result<()>
+) -> Result<LiquidationResult>
 where
     P: Provider + 'static,
 {
@@ -261,7 +262,10 @@ where
                 }
             }
 
-            return Ok(());
+            return Ok(LiquidationResult::NotNeeded {
+                reason: LiquidationSkipReason::UserNotFound,
+                user,
+            });
         }
         Err(e) => {
             error!("Failed to get user position: {}", e);
@@ -289,12 +293,18 @@ where
             "User {:?} has no collateral assets - cannot liquidate",
             user
         );
-        return Ok(());
+        return Ok(LiquidationResult::NotNeeded {
+            reason: LiquidationSkipReason::NoCollateral,
+            user,
+        });
     }
 
     if user_debt_assets.is_empty() {
         warn!("User {:?} has no debt assets - nothing to liquidate", user);
-        return Ok(());
+        return Ok(LiquidationResult::NotNeeded {
+            reason: LiquidationSkipReason::NoDebt,
+            user,
+        });
     }
 
     // Find the most profitable liquidation pair by simulating all viable combinations
@@ -311,7 +321,10 @@ where
         Some(opp) => opp,
         None => {
             warn!("No profitable liquidation pair found for user: {:?}", user);
-            return Ok(());
+            return Ok(LiquidationResult::NotNeeded {
+                reason: LiquidationSkipReason::NoProfitablePair,
+                user,
+            });
         }
     };
 
@@ -330,7 +343,13 @@ where
         )
         .await?;
 
-        return Ok(());
+        return Ok(LiquidationResult::NotNeeded {
+            reason: LiquidationSkipReason::InsufficientProfit {
+                estimated_profit: opportunity.estimated_profit,
+                min_threshold: min_profit_threshold,
+            },
+            user,
+        });
     }
 
     info!("✅ Liquidation opportunity validated - proceeding with execution");
@@ -371,6 +390,13 @@ where
 
                     // Save liquidation record
                     save_liquidation_record(db_pool, &opportunity, &tx_hash).await?;
+                    
+                    // Return successful execution
+                    return Ok(LiquidationResult::Executed {
+                        tx_hash,
+                        profit: opportunity.estimated_profit,
+                        user,
+                    });
                 }
                 Err(e) => {
                     error!("Failed to execute liquidation: {}", e);
@@ -435,10 +461,21 @@ where
                 )),
             )
             .await?;
+            
+            return Ok(LiquidationResult::NotNeeded {
+                reason: LiquidationSkipReason::SimulationOnly {
+                    estimated_profit: opportunity.estimated_profit,
+                },
+                user,
+            });
         }
     }
 
-    Ok(())
+    // This should be unreachable, but just in case
+    Ok(LiquidationResult::NotNeeded {
+        reason: LiquidationSkipReason::NoProfitablePair,
+        user,
+    })
 }
 
 /// Get user position from database
