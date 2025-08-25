@@ -101,26 +101,26 @@ where
         // Create the function call
         let call = self.liquidator_contract.function("liquidate", &args)?;
         let tx_request = call.into_transaction_request();
-        
+
         // Get current gas price and apply multiplier for priority
         let gas_price = self.provider.get_gas_price().await?;
         let priority_gas_price = gas_price * 2; // 2x gas for priority execution
-        
+
         info!(
             "📝 Preparing liquidation transaction with gas price: {} gwei",
-            priority_gas_price / U256::from(1_000_000_000)
+            priority_gas_price / 1_000_000_000u128
         );
         info!(
             "Parameters: user={}, collateral={}, debt={}, amount={}",
             params.user, params.collateral_asset, params.debt_asset, params.debt_to_cover
         );
-        
+
         // IMPORTANT: Transaction Execution Implementation
         // ==============================================
         // This is where the actual transaction needs to be sent to the blockchain.
         // The current implementation shows the structure but needs to be completed
         // based on your specific alloy provider configuration.
-        
+
         // Option 1: If using a provider with signer middleware (recommended)
         // --------------------------------------------------------------------
         // The provider should be created with the signer attached, like:
@@ -128,17 +128,17 @@ where
         //     .with_recommended_fillers()
         //     .wallet(wallet)
         //     .on_http(url);
-        // 
+        //
         // Then you can send transactions directly:
         // let pending_tx = call.send().await?;
         // let receipt = pending_tx.get_receipt().await?;
-        
+
         // Option 2: Manual transaction signing and sending
         // -------------------------------------------------
         // 1. Build the transaction request with all parameters
         // 2. Sign it with the signer
         // 3. Send the raw signed transaction
-        
+
         // For demonstration, here's a placeholder that shows the transaction would be sent:
         error!("🔴 CRITICAL: Transaction execution not fully implemented!");
         error!("The liquidation transaction has been prepared but NOT sent to the blockchain.");
@@ -154,8 +154,11 @@ where
         error!("  Collateral: {}", params.collateral_asset);
         error!("  Debt: {}", params.debt_asset);
         error!("  Amount: {}", params.debt_to_cover);
-        error!("  Gas Price: {} gwei", priority_gas_price / U256::from(1_000_000_000));
-        
+        error!(
+            "  Gas Price: {} gwei",
+            priority_gas_price / 1_000_000_000u128
+        );
+
         // Return an error to prevent false positive liquidation tracking
         Err(eyre::eyre!(
             "Transaction execution not implemented. The liquidation bot is currently in dry-run mode. \
@@ -216,8 +219,11 @@ where
         if let Some(asset_config) = self.asset_configs.get(&asset_address) {
             Ok(asset_config.asset_id)
         } else {
-            error!("Asset address {:#x} not found in asset configurations. Available assets: {:?}", 
-                   asset_address, self.asset_configs.keys().collect::<Vec<_>>());
+            error!(
+                "Asset address {:#x} not found in asset configurations. Available assets: {:?}",
+                asset_address,
+                self.asset_configs.keys().collect::<Vec<_>>()
+            );
             Err(eyre::eyre!("Unknown asset address: {:#x}", asset_address))
         }
     }
