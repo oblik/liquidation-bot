@@ -4,6 +4,17 @@ use alloy_sol_types::sol;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+/// Result of a liquidation attempt
+#[derive(Debug, Clone)]
+pub enum LiquidationResult {
+    /// Liquidation was executed on-chain with the given transaction hash
+    Executed(String),
+    /// No liquidation was needed (user safe, no profitable pairs, etc.)
+    NotNeeded(String),
+    /// Liquidation failed with an error
+    Failed(String),
+}
+
 // Define Aave events using sol! macro for type safety
 sol! {
     event Borrow(

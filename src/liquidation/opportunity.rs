@@ -227,7 +227,7 @@ pub async fn handle_liquidation_opportunity<P>(
     signer: Option<alloy_signer_local::PrivateKeySigner>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     asset_configs: &std::collections::HashMap<Address, LiquidationAssetConfig>,
-) -> Result<()>
+) -> Result<crate::models::LiquidationResult>
 where
     P: Provider + 'static,
 {
@@ -261,7 +261,9 @@ where
                 }
             }
 
-            return Ok(());
+            return Ok(crate::models::LiquidationResult::NotNeeded(
+                "User position not found in database".to_string(),
+            ));
         }
         Err(e) => {
             error!("Failed to get user position: {}", e);
@@ -289,12 +291,16 @@ where
             "User {:?} has no collateral assets - cannot liquidate",
             user
         );
-        return Ok(());
+        return Ok(crate::models::LiquidationResult::NotNeeded(
+            format!("User {:?} has no collateral assets", user),
+        ));
     }
 
     if user_debt_assets.is_empty() {
         warn!("User {:?} has no debt assets - nothing to liquidate", user);
-        return Ok(());
+        return Ok(crate::models::LiquidationResult::NotNeeded(
+            format!("User {:?} has no debt assets", user),
+        ));
     }
 
     // Find the most profitable liquidation pair by simulating all viable combinations
@@ -311,7 +317,9 @@ where
         Some(opp) => opp,
         None => {
             warn!("No profitable liquidation pair found for user: {:?}", user);
-            return Ok(());
+            return Ok(crate::models::LiquidationResult::NotNeeded(
+                format!("No profitable liquidation pair found for user: {:?}", user),
+            ));
         }
     };
 
@@ -330,7 +338,9 @@ where
         )
         .await?;
 
-        return Ok(());
+        return Ok(crate::models::LiquidationResult::NotNeeded(
+            format!("Liquidation rejected: profit {} < threshold {} wei", opportunity.estimated_profit, min_profit_threshold),
+        ));
     }
 
     info!("✅ Liquidation opportunity validated - proceeding with execution");
@@ -371,6 +381,8 @@ where
 
                     // Save liquidation record
                     save_liquidation_record(db_pool, &opportunity, &tx_hash).await?;
+                    
+                    return Ok(crate::models::LiquidationResult::Executed(tx_hash));
                 }
                 Err(e) => {
                     error!("Failed to execute liquidation: {}", e);
@@ -435,10 +447,12 @@ where
                 )),
             )
             .await?;
+            
+            return Ok(crate::models::LiquidationResult::NotNeeded(
+                format!("Simulated liquidation - would have made {} wei profit", opportunity.estimated_profit),
+            ));
         }
     }
-
-    Ok(())
 }
 
 /// Get user position from database

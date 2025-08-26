@@ -1,10 +1,9 @@
 use alloy_contract::{ContractInstance, Interface};
+use alloy_network::EthereumWallet;
 use alloy_primitives::{Address, U256};
-use alloy_provider::Provider;
+use alloy_provider::{Provider, ProviderBuilder};
 use alloy_signer_local::PrivateKeySigner;
 use eyre::Result;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hasher;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -17,6 +16,8 @@ pub struct LiquidationExecutor<P> {
     liquidator_contract: ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     contract_address: Address,
     asset_configs: std::collections::HashMap<Address, LiquidationAssetConfig>,
+    contract_interface: Interface,
+    rpc_url: String,
 }
 
 impl<P> LiquidationExecutor<P>
@@ -33,7 +34,11 @@ where
         // Load the ABI from deployment info or hardcoded
         let liquidator_abi = get_liquidator_abi()?;
         let interface = Interface::new(liquidator_abi);
-        let liquidator_contract = interface.connect(contract_address, provider.clone());
+        let liquidator_contract = interface.clone().connect(contract_address, provider.clone());
+        
+        // Get RPC URL from environment or use default
+        let rpc_url = std::env::var("RPC_URL")
+            .unwrap_or_else(|_| "http://localhost:8545".to_string());
 
         Ok(Self {
             provider,
@@ -41,6 +46,8 @@ where
             liquidator_contract,
             contract_address,
             asset_configs,
+            contract_interface: interface,
+            rpc_url,
         })
     }
 
@@ -99,29 +106,72 @@ where
             alloy_dyn_abi::DynSolValue::Uint(U256::from(params.debt_asset_id), 16),
         ];
 
-        // Create transaction request
-        let call = self.liquidator_contract.function("liquidate", &args)?;
-        let _tx_req = call.into_transaction_request();
-
-        // Get gas price for logging
-        let gas_price_u128 = self.provider.get_gas_price().await?;
-
-        // For now, let's create the transaction bytes directly
-        // TODO: Implement proper transaction signing when alloy APIs are clearer
-        warn!("🚧 Transaction signing implementation needed");
-        warn!(
-            "Would execute liquidation with gas price: {}",
-            gas_price_u128 * 2
-        );
-        warn!(
-            "Parameters: user={}, collateral={}, debt={}, amount={}",
+        // Create the function call
+        let _call = self.liquidator_contract.function("liquidate", &args)?;
+        
+        // Get current gas price and apply multiplier
+        let gas_price = self.provider.get_gas_price().await?;
+        let adjusted_gas_price = gas_price * 2; // 2x multiplier for faster inclusion
+        
+        info!(
+            "📝 Preparing liquidation transaction: user={}, collateral={}, debt={}, amount={}",
             params.user, params.collateral_asset, params.debt_asset, params.debt_to_cover
         );
-
-        // Return a mock transaction hash for now
-        let mock_tx_hash = format!("0x{:064x}", DefaultHasher::new().finish());
-
-        Ok(mock_tx_hash)
+        info!("⛽ Gas price: {} wei (2x multiplier applied)", adjusted_gas_price);
+        
+        // Since the provider should now have wallet integration (created with with_recommended_fillers().wallet()),
+        // we can send the transaction directly
+        // Note: The actual transaction sending requires the provider to have wallet integration
+        
+        // Create a wallet-enabled provider for sending the transaction
+        let wallet = EthereumWallet::from(self.signer.clone());
+        
+        // Create a signing provider with wallet integration
+        let signing_provider = ProviderBuilder::new()
+            .with_recommended_fillers()
+            .wallet(wallet)
+            .on_http(url::Url::parse(&self.rpc_url).map_err(|e| eyre::eyre!("Invalid RPC URL: {}", e))?);
+        
+        // Create a new contract instance with the signing provider
+        let signing_contract = self.contract_interface.clone()
+            .connect(self.contract_address, Arc::new(signing_provider));
+        
+        // Build and send the transaction using the signing-enabled contract
+        let tx_builder = signing_contract.function("liquidate", &args)?
+            .gas_price(adjusted_gas_price)
+            .gas(500000); // Set reasonable gas limit for liquidation
+        
+        // Send the transaction
+        info!("🚀 Sending liquidation transaction...");
+        
+        let pending_tx = tx_builder
+            .send()
+            .await
+            .map_err(|e| {
+                error!("Failed to send transaction: {}", e);
+                eyre::eyre!("Transaction send failed: {}", e)
+            })?;
+        
+        // Get the transaction hash
+        let tx_hash = *pending_tx.tx_hash();
+        info!("🚀 Liquidation transaction sent! TX hash: {}", tx_hash);
+        
+        // Wait for confirmation
+        info!("⏳ Waiting for transaction confirmation...");
+        let receipt = pending_tx
+            .get_receipt()
+            .await
+            .map_err(|e| eyre::eyre!("Failed to get transaction receipt: {}", e))?;
+        
+        // Check if the transaction was successful
+        if receipt.status() {
+            info!("✅ Liquidation transaction confirmed! Gas used: {:?}", receipt.gas_used);
+        } else {
+            error!("❌ Liquidation transaction failed on-chain");
+            return Err(eyre::eyre!("Transaction reverted on-chain"));
+        }
+        
+        Ok(format!("{:#x}", tx_hash))
     }
 
     /// Wait for transaction confirmation

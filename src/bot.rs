@@ -138,27 +138,39 @@ where
             )
             .await;
 
-            let liquidation_succeeded = liquidation_result.is_ok();
+            let liquidation_succeeded = matches!(
+                liquidation_result,
+                Ok(crate::models::LiquidationResult::Executed(_))
+            );
 
-            // Handle liquidation failure with fallback
-            if let Err(e) = liquidation_result {
-                error!(
-                    "Failed to handle priority liquidation opportunity for {:?}: {}",
-                    user_address, e
-                );
-
-                // Fallback to legacy handler for logging
-                if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
-                    &self.db_pool,
-                    user_address,
-                    self.config.min_profit_threshold,
-                )
-                .await
-                {
-                    error!("Legacy liquidation handler also failed for priority liquidation: {}", legacy_err);
+            // Handle liquidation result
+            match liquidation_result {
+                Ok(crate::models::LiquidationResult::Executed(tx_hash)) => {
+                    info!("✅ Priority liquidation executed successfully for user: {:?}, TX: {}", user_address, tx_hash);
                 }
-            } else {
-                info!("✅ Priority liquidation executed successfully for user: {:?}", user_address);
+                Ok(crate::models::LiquidationResult::NotNeeded(reason)) => {
+                    debug!("Priority liquidation not needed for user {:?}: {}", user_address, reason);
+                }
+                Ok(crate::models::LiquidationResult::Failed(error)) => {
+                    error!("Priority liquidation failed for user {:?}: {}", user_address, error);
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to handle priority liquidation opportunity for {:?}: {}",
+                        user_address, e
+                    );
+
+                    // Fallback to legacy handler for logging
+                    if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
+                        &self.db_pool,
+                        user_address,
+                        self.config.min_profit_threshold,
+                    )
+                    .await
+                    {
+                        error!("Legacy liquidation handler also failed for priority liquidation: {}", legacy_err);
+                    }
+                }
             }
 
             // Record ALL liquidation attempts (both successful and failed) for frequency monitoring
@@ -431,24 +443,38 @@ where
                     )
                     .await;
 
-                    let liquidation_succeeded = liquidation_result.is_ok();
+                    let liquidation_succeeded = matches!(
+                liquidation_result,
+                Ok(crate::models::LiquidationResult::Executed(_))
+            );
 
-                    // Handle liquidation failure with fallback
-                    if let Err(e) = liquidation_result {
-                        error!(
-                            "Failed to handle liquidation opportunity for {:?}: {}",
-                            user, e
-                        );
+                    // Handle liquidation result
+                    match liquidation_result {
+                        Ok(crate::models::LiquidationResult::Executed(tx_hash)) => {
+                            info!("✅ Liquidation executed successfully for user: {:?}, TX: {}", user, tx_hash);
+                        }
+                        Ok(crate::models::LiquidationResult::NotNeeded(reason)) => {
+                            debug!("Liquidation not needed for user {:?}: {}", user, reason);
+                        }
+                        Ok(crate::models::LiquidationResult::Failed(error)) => {
+                            error!("Liquidation failed for user {:?}: {}", user, error);
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to handle liquidation opportunity for {:?}: {}",
+                                user, e
+                            );
 
-                        // Fallback to legacy handler for logging
-                        if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
-                            &self.db_pool,
-                            user,
-                            self.config.min_profit_threshold,
-                        )
-                        .await
-                        {
-                            error!("Legacy liquidation handler also failed: {}", legacy_err);
+                            // Fallback to legacy handler for logging
+                            if let Err(legacy_err) = liquidation::handle_liquidation_opportunity_legacy(
+                                &self.db_pool,
+                                user,
+                                self.config.min_profit_threshold,
+                            )
+                            .await
+                            {
+                                error!("Legacy liquidation handler also failed: {}", legacy_err);
+                            }
                         }
                     }
 
