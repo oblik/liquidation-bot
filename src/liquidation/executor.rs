@@ -277,8 +277,6 @@ where
 
         Ok(mock_tx_hash)
     }
-    }
-
 
     /// Wait for transaction confirmation
     async fn wait_for_confirmation(&self, tx_hash: &str) -> Result<()> {
