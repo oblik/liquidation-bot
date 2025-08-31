@@ -398,7 +398,7 @@ where
                 contract_addr,
                 asset_configs.clone(),
                 rpc_url.to_string(),
-            )?
+            )?;
 
             // Verify contract setup
             if let Err(e) = executor.verify_contract_setup().await {
