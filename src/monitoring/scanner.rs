@@ -456,12 +456,12 @@ where
             {
                 // Send to priority channel if available (for immediate processing)
                 if let Some(priority_tx) = &priority_liquidation_tx {
-                    debug!(
-                        "⚡ Sending priority liquidation for user: {:?}",
-                        user
-                    );
+                    debug!("⚡ Sending priority liquidation for user: {:?}", user);
                     if let Err(e) = priority_tx.send(user) {
-                        warn!("Failed to send priority liquidation for user {:?}: {}", user, e);
+                        warn!(
+                            "Failed to send priority liquidation for user {:?}: {}",
+                            user, e
+                        );
                         // Fallback to regular event queue
                         let _ = event_tx.send(BotEvent::LiquidationOpportunity(user));
                     }
@@ -696,17 +696,30 @@ where
                     // Send to priority channel if available (for immediate processing)
                     if let Some(priority_tx) = &priority_liquidation_tx {
                         info!("⚡ User {:?} is LIQUIDATABLE (HF < 1.0) - sending priority liquidation", user.address);
-                        if let Err(e) = priority_tx.send(user.address) {
-                            warn!("Failed to send priority liquidation for user {:?}: {}", user.address, e);
-                            // Fallback to regular event queue
-                            if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
-                                warn!("Failed to send liquidation opportunity fallback: {}", e);
+                        match priority_tx.send(user.address) {
+                            Ok(()) => {
+                                info!("✅ Priority liquidation sent successfully for user {:?}", user.address);
+                            }
+                            Err(e) => {
+                                warn!("❌ Failed to send priority liquidation for user {:?}: {}", user.address, e);
+                                // Fallback to regular event queue
+                                info!("🔄 Falling back to regular event queue for user {:?}", user.address);
+                                if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                    error!("❌ CRITICAL: Failed to send liquidation opportunity fallback: {}", e);
+                                } else {
+                                    info!("✅ Fallback liquidation opportunity sent for user {:?}", user.address);
+                                }
                             }
                         }
                     } else {
-                        info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
-                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
-                            warn!("Failed to send liquidation opportunity: {}", e);
+                        info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity via regular channel", user.address);
+                        match event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                            Ok(()) => {
+                                info!("✅ Liquidation opportunity sent successfully for user {:?}", user.address);
+                            }
+                            Err(e) => {
+                                error!("❌ CRITICAL: Failed to send liquidation opportunity: {}", e);
+                            }
                         }
                     }
                 } else if position.health_factor < U256::from(CRITICAL_THRESHOLD) {
@@ -782,17 +795,30 @@ where
                                     // Send to priority channel if available (for immediate processing)
                                     if let Some(priority_tx) = &priority_liquidation_tx {
                                         info!("⚡ User {:?} is LIQUIDATABLE (HF < 1.0) - sending priority liquidation (full rescan)", user.address);
-                                        if let Err(e) = priority_tx.send(user.address) {
-                                            warn!("Failed to send priority liquidation for user {:?}: {}", user.address, e);
-                                            // Fallback to regular event queue
-                                            if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
-                                                warn!("Failed to send liquidation opportunity fallback: {}", e);
+                                        match priority_tx.send(user.address) {
+                                            Ok(()) => {
+                                                info!("✅ Priority liquidation sent successfully for user {:?} (full rescan)", user.address);
+                                            }
+                                            Err(e) => {
+                                                warn!("❌ Failed to send priority liquidation for user {:?}: {}", user.address, e);
+                                                // Fallback to regular event queue
+                                                info!("🔄 Falling back to regular event queue for user {:?} (full rescan)", user.address);
+                                                if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                                    error!("❌ CRITICAL: Failed to send liquidation opportunity fallback: {}", e);
+                                                } else {
+                                                    info!("✅ Fallback liquidation opportunity sent for user {:?} (full rescan)", user.address);
+                                                }
                                             }
                                         }
                                     } else {
-                                        info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity", user.address);
-                                        if let Err(e) = event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
-                                            warn!("Failed to send liquidation opportunity: {}", e);
+                                        info!("🎯 User {:?} is LIQUIDATABLE (HF < 1.0) - sending liquidation opportunity via regular channel (full rescan)", user.address);
+                                        match event_tx.send(BotEvent::LiquidationOpportunity(user.address)) {
+                                            Ok(()) => {
+                                                info!("✅ Liquidation opportunity sent successfully for user {:?} (full rescan)", user.address);
+                                            }
+                                            Err(e) => {
+                                                error!("❌ CRITICAL: Failed to send liquidation opportunity: {}", e);
+                                            }
                                         }
                                     }
                                 } else if position.health_factor < U256::from(CRITICAL_THRESHOLD) {

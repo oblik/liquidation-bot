@@ -1,6 +1,14 @@
 use alloy_primitives::{Address, U256};
 use eyre::Result;
-use tracing::warn;
+use tracing::{info, warn};
+
+/// Helper function to convert wei to ETH as f64 for display
+fn wei_to_eth_f64(wei: U256) -> f64 {
+    const ETH_DECIMALS: U256 = U256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]); // 10^18
+    let eth_u128 = (wei / ETH_DECIMALS).to::<u128>();
+    let remainder = (wei % ETH_DECIMALS).to::<u128>();
+    eth_u128 as f64 + (remainder as f64 / ETH_DECIMALS.to::<u128>() as f64)
+}
 
 // Asset loading method configuration
 #[derive(Debug, Clone)]
@@ -83,7 +91,10 @@ impl BotConfig {
 
         let min_profit_threshold = match std::env::var("MIN_PROFIT_THRESHOLD") {
             Ok(threshold_str) => match threshold_str.parse::<U256>() {
-                Ok(threshold) => threshold,
+                Ok(threshold) => {
+                    info!("💰 Using MIN_PROFIT_THRESHOLD from environment: {} wei ({:.6} ETH)", threshold, wei_to_eth_f64(threshold));
+                    threshold
+                }
                 Err(e) => {
                     warn!(
                         "Invalid MIN_PROFIT_THRESHOLD '{}': {}. Using default 0.01 ETH.",
@@ -92,7 +103,11 @@ impl BotConfig {
                     U256::from(10000000000000000u64) // 0.01 ETH wei default
                 }
             },
-            Err(_) => U256::from(10000000000000000u64), // 0.01 ETH wei default
+            Err(_) => {
+                let default_threshold = U256::from(10000000000000000u64); // 0.01 ETH wei default
+                info!("💰 Using default MIN_PROFIT_THRESHOLD: {} wei ({:.6} ETH)", default_threshold, wei_to_eth_f64(default_threshold));
+                default_threshold
+            }
         };
 
         let gas_price_multiplier = match std::env::var("GAS_PRICE_MULTIPLIER") {
