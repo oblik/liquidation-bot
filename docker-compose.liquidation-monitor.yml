@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  liquidation-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.liquidation-monitor
+    container_name: aave-liquidation-monitor
+    environment:
+      # Network Configuration
+      - RPC_URL=${RPC_URL:-https://base-mainnet.g.alchemy.com/v2/YOUR_KEY}
+      - WS_URL=${WS_URL:-wss://base-mainnet.g.alchemy.com/v2/YOUR_KEY}
+      - POOL_ADDRESS=${POOL_ADDRESS:-0xA238Dd80C259a72e81d7e4664a9801593F98d1c5}
+      
+      # Monitor Configuration
+      - LIQUIDATION_MONITOR_MAX_EVENTS=${LIQUIDATION_MONITOR_MAX_EVENTS:-1000}
+      - LIQUIDATION_MONITOR_LOG_TO_FILE=${LIQUIDATION_MONITOR_LOG_TO_FILE:-true}
+      - LIQUIDATION_MONITOR_LOG_FILE=/app/logs/liquidations.jsonl
+      - LIQUIDATION_MONITOR_STATS_INTERVAL=${LIQUIDATION_MONITOR_STATS_INTERVAL:-30}
+      - LIQUIDATION_MONITOR_VERBOSE=${LIQUIDATION_MONITOR_VERBOSE:-false}
+      
+      # Rust logging
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - ./logs:/app/logs
+      - ./config:/app/config
+    restart: unless-stopped
+    command: ["monitor", "--max-events", "1000"]
+    
+  # Optional: Run historical analysis
+  liquidation-historical:
+    build:
+      context: .
+      dockerfile: Dockerfile.liquidation-monitor
+    container_name: aave-liquidation-historical
+    environment:
+      - RPC_URL=${RPC_URL:-https://base-mainnet.g.alchemy.com/v2/YOUR_KEY}
+      - POOL_ADDRESS=${POOL_ADDRESS:-0xA238Dd80C259a72e81d7e4664a9801593F98d1c5}
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - ./logs:/app/logs
+    profiles:
+      - historical
+    command: ["historical", "--from-block", "${FROM_BLOCK:-0}", "--to-block", "${TO_BLOCK:-}"]

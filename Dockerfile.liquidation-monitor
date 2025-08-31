@@ -1,0 +1,37 @@
+# Dockerfile for Liquidation Monitor
+FROM rust:1.75 as builder
+
+WORKDIR /app
+
+# Copy the source code
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY abi ./abi
+
+# Build the liquidation monitor binary
+RUN cargo build --release --bin liquidation-monitor
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the binary from builder
+COPY --from=builder /app/target/release/liquidation-monitor /usr/local/bin/liquidation-monitor
+
+# Copy ABI files if needed
+COPY abi ./abi
+
+# Create a directory for logs
+RUN mkdir -p /app/logs
+
+# Set environment variables (can be overridden)
+ENV LIQUIDATION_MONITOR_LOG_FILE=/app/logs/liquidations.jsonl
+
+# Default command
+ENTRYPOINT ["liquidation-monitor"]
+CMD ["monitor"]
