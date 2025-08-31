@@ -30,15 +30,14 @@ where
         signer: PrivateKeySigner,
         contract_address: Address,
         asset_configs: std::collections::HashMap<Address, LiquidationAssetConfig>,
+        rpc_url: String,
     ) -> Result<Self> {
         // Load the ABI from deployment info or hardcoded
         let liquidator_abi = get_liquidator_abi()?;
         let interface = Interface::new(liquidator_abi);
-        let liquidator_contract = interface.clone().connect(contract_address, provider.clone());
-        
-        // Get RPC URL from environment or use default
-        let rpc_url = std::env::var("RPC_URL")
-            .unwrap_or_else(|_| "http://localhost:8545".to_string());
+        let liquidator_contract = interface
+            .clone()
+            .connect(contract_address, provider.clone());
 
         Ok(Self {
             provider,
@@ -108,69 +107,78 @@ where
 
         // Create the function call
         let _call = self.liquidator_contract.function("liquidate", &args)?;
-        
+
         // Get current gas price and apply multiplier
         let gas_price = self.provider.get_gas_price().await?;
         let adjusted_gas_price = gas_price * 2; // 2x multiplier for faster inclusion
-        
+
         info!(
             "📝 Preparing liquidation transaction: user={}, collateral={}, debt={}, amount={}",
             params.user, params.collateral_asset, params.debt_asset, params.debt_to_cover
         );
-        info!("⛽ Gas price: {} wei (2x multiplier applied)", adjusted_gas_price);
-        
+        info!(
+            "⛽ Gas price: {} wei (2x multiplier applied)",
+            adjusted_gas_price
+        );
+
         // Since the provider should now have wallet integration (created with with_recommended_fillers().wallet()),
         // we can send the transaction directly
         // Note: The actual transaction sending requires the provider to have wallet integration
-        
+
         // Create a wallet-enabled provider for sending the transaction
         let wallet = EthereumWallet::from(self.signer.clone());
-        
+
         // Create a signing provider with wallet integration
         let signing_provider = ProviderBuilder::new()
             .with_recommended_fillers()
             .wallet(wallet)
-            .on_http(url::Url::parse(&self.rpc_url).map_err(|e| eyre::eyre!("Invalid RPC URL: {}", e))?);
-        
+            .on_http(
+                url::Url::parse(&self.rpc_url)
+                    .map_err(|e| eyre::eyre!("Invalid RPC URL: {}", e))?,
+            );
+
         // Create a new contract instance with the signing provider
-        let signing_contract = self.contract_interface.clone()
+        let signing_contract = self
+            .contract_interface
+            .clone()
             .connect(self.contract_address, Arc::new(signing_provider));
-        
+
         // Build and send the transaction using the signing-enabled contract
-        let tx_builder = signing_contract.function("liquidate", &args)?
+        let tx_builder = signing_contract
+            .function("liquidate", &args)?
             .gas_price(adjusted_gas_price)
             .gas(500000); // Set reasonable gas limit for liquidation
-        
+
         // Send the transaction
         info!("🚀 Sending liquidation transaction...");
-        
-        let pending_tx = tx_builder
-            .send()
-            .await
-            .map_err(|e| {
-                error!("Failed to send transaction: {}", e);
-                eyre::eyre!("Transaction send failed: {}", e)
-            })?;
-        
+
+        let pending_tx = tx_builder.send().await.map_err(|e| {
+            error!("Failed to send transaction: {}", e);
+            eyre::eyre!("Transaction send failed: {}", e)
+        })?;
+
         // Get the transaction hash
         let tx_hash = *pending_tx.tx_hash();
         info!("🚀 Liquidation transaction sent! TX hash: {}", tx_hash);
-        
+
         // Wait for confirmation
         info!("⏳ Waiting for transaction confirmation...");
         let receipt = pending_tx
             .get_receipt()
             .await
             .map_err(|e| eyre::eyre!("Failed to get transaction receipt: {}", e))?;
-        
+
         // Check if the transaction was successful
         if receipt.status() {
-            info!("✅ Liquidation transaction confirmed! Gas used: {:?}", receipt.gas_used);
+            info!(
+                "✅ Liquidation transaction confirmed! Gas used: {:?}",
+                receipt.gas_used
+            );
         } else {
             error!("❌ Liquidation transaction failed on-chain");
             return Err(eyre::eyre!("Transaction reverted on-chain"));
         }
-        
+
         Ok(format!("{:#x}", tx_hash))
     }
 
@@ -227,8 +235,11 @@ where
         if let Some(asset_config) = self.asset_configs.get(&asset_address) {
             Ok(asset_config.asset_id)
         } else {
-            error!("Asset address {:#x} not found in asset configurations. Available assets: {:?}", 
-                   asset_address, self.asset_configs.keys().collect::<Vec<_>>());
+            error!(
+                "Asset address {:#x} not found in asset configurations. Available assets: {:?}",
+                asset_address,
+                self.asset_configs.keys().collect::<Vec<_>>()
+            );
             Err(eyre::eyre!("Unknown asset address: {:#x}", asset_address))
         }
     }
