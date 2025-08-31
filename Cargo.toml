@@ -13,6 +13,8 @@ anyhow = "1"
 
 # Ethereum and Alloy
 alloy-provider = { version = "0.5.4", features = ["reqwest", "ws"] }
+alloy-network = "0.5.4"
+alloy-transport-http = "0.5.4"
 alloy-transport = "0.5.4"
 alloy-contract = "0.5.4"
 alloy-primitives = "0.8.14"

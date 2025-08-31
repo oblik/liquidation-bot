@@ -2187,6 +2187,7 @@ dependencies = [
  "alloy-signer-local",
  "alloy-sol-types",
  "alloy-transport",
+ "alloy-transport-http",
  "anyhow",
  "async-trait",
  "chrono",

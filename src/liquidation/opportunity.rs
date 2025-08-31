@@ -10,7 +10,10 @@ use tracing::{debug, error, info, warn};
 
 use super::{assets, executor, profitability};
 use crate::database;
-use crate::models::{LiquidationAssetConfig, LiquidationOpportunity, UserPosition};
+use crate::models::{
+    LiquidationAssetConfig, LiquidationOpportunity, LiquidationResult, NotNeededReason,
+    UserPosition,
+};
 
 /// Find the most profitable liquidation pair by simulating all viable combinations
 async fn find_most_profitable_liquidation_pair<P>(
@@ -24,12 +27,57 @@ async fn find_most_profitable_liquidation_pair<P>(
 where
     P: Provider,
 {
+    // Log user's assets
+    info!(
+        "👤 User {} has {} collateral assets: {:?}",
+        user_position.address,
+        user_collateral_assets.len(),
+        user_collateral_assets
+    );
+    info!(
+        "👤 User {} has {} debt assets: {:?}",
+        user_position.address,
+        user_debt_assets.len(),
+        user_debt_assets
+    );
+
     // Get all viable pairs
     let viable_pairs =
         assets::get_all_viable_liquidation_pairs(assets, user_collateral_assets, user_debt_assets);
 
     if viable_pairs.is_empty() {
-        debug!("No viable liquidation pairs found");
+        warn!("❌ No viable liquidation pairs found - this indicates an issue with asset configuration");
+        info!(
+            "🔍 Available asset configs: {:?}",
+            assets.keys().collect::<Vec<_>>()
+        );
+
+        // Detailed diagnosis
+        warn!("🔬 ASSET CONFIGURATION DIAGNOSIS:");
+        for &collateral_addr in user_collateral_assets {
+            if let Some(config) = assets.get(&collateral_addr) {
+                info!(
+                    "  ✅ Collateral {} ({}) - is_collateral: {}",
+                    config.symbol, collateral_addr, config.is_collateral
+                );
+            } else {
+                warn!(
+                    "  ❌ Collateral {} NOT FOUND in asset configs",
+                    collateral_addr
+                );
+            }
+        }
+        for &debt_addr in user_debt_assets {
+            if let Some(config) = assets.get(&debt_addr) {
+                info!(
+                    "  ✅ Debt {} ({}) - is_borrowable: {}",
+                    config.symbol, debt_addr, config.is_borrowable
+                );
+            } else {
+                warn!("  ❌ Debt {} NOT FOUND in asset configs", debt_addr);
+            }
+        }
+
         return Ok(None);
     }
 
@@ -62,7 +110,7 @@ where
             }
         };
 
-        debug!(
+        info!(
             "💰 Simulating: {} collateral -> {} debt",
             collateral_asset.symbol, debt_asset.symbol
         );
@@ -87,9 +135,9 @@ where
             }
         };
 
-        debug!(
-            "   Estimated profit: {} wei (profitable: {})",
-            opportunity.estimated_profit, opportunity.profit_threshold_met
+        info!(
+            "   💰 PROFIT ANALYSIS: {} wei profit (threshold: {} wei) - Profitable: {}",
+            opportunity.estimated_profit, min_profit_threshold, opportunity.profit_threshold_met
         );
 
         // Track the most profitable opportunity
@@ -228,7 +276,7 @@ pub async fn handle_liquidation_opportunity<P>(
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     asset_configs: &std::collections::HashMap<Address, LiquidationAssetConfig>,
     rpc_url: &str,
-) -> Result<crate::models::LiquidationResult>
+) -> Result<LiquidationResult>
 where
     P: Provider + 'static,
 {
@@ -262,9 +310,7 @@ where
                 }
             }
 
-            return Ok(crate::models::LiquidationResult::NotNeeded(
-                "User position not found in database".to_string(),
-            ));
+            return Ok(LiquidationResult::NotNeeded(NotNeededReason::UserNotFound));
         }
         Err(e) => {
             error!("Failed to get user position: {}", e);
@@ -292,18 +338,12 @@ where
             "User {:?} has no collateral assets - cannot liquidate",
             user
         );
-        return Ok(crate::models::LiquidationResult::NotNeeded(format!(
-            "User {:?} has no collateral assets",
-            user
-        )));
+        return Ok(LiquidationResult::NotNeeded(NotNeededReason::NoCollateral));
     }
 
     if user_debt_assets.is_empty() {
         warn!("User {:?} has no debt assets - nothing to liquidate", user);
-        return Ok(crate::models::LiquidationResult::NotNeeded(format!(
-            "User {:?} has no debt assets",
-            user
-        )));
+        return Ok(LiquidationResult::NotNeeded(NotNeededReason::NoDebt));
     }
 
     // Find the most profitable liquidation pair by simulating all viable combinations
@@ -320,10 +360,9 @@ where
         Some(opp) => opp,
         None => {
             warn!("No profitable liquidation pair found for user: {:?}", user);
-            return Ok(crate::models::LiquidationResult::NotNeeded(format!(
-                "No profitable liquidation pair found for user: {:?}",
-                user
-            )));
+            return Ok(LiquidationResult::NotNeeded(
+                NotNeededReason::NoProfitablePairs,
+            ));
         }
     };
 
@@ -342,10 +381,9 @@ where
         )
         .await?;
 
-        return Ok(crate::models::LiquidationResult::NotNeeded(format!(
-            "Liquidation rejected: profit {} < threshold {} wei",
-            opportunity.estimated_profit, min_profit_threshold
-        )));
+        return Ok(LiquidationResult::NotNeeded(
+            NotNeededReason::InsufficientProfit,
+        ));
     }
 
     info!("✅ Liquidation opportunity validated - proceeding with execution");
@@ -360,7 +398,7 @@ where
                 contract_addr,
                 asset_configs.clone(),
                 rpc_url.to_string(),
-            )?;
+            )?
 
             // Verify contract setup
             if let Err(e) = executor.verify_contract_setup().await {
@@ -388,7 +426,7 @@ where
                     // Save liquidation record
                     save_liquidation_record(db_pool, &opportunity, &tx_hash).await?;
 
-                    return Ok(crate::models::LiquidationResult::Executed(tx_hash));
+                    return Ok(LiquidationResult::Executed(tx_hash));
                 }
                 Err(e) => {
                     error!("Failed to execute liquidation: {}", e);
@@ -431,7 +469,7 @@ where
                         );
                     }
 
-                    return Ok(crate::models::LiquidationResult::Failed(e.to_string()));
+                    return Ok(LiquidationResult::Failed(e.to_string()));
                 }
             }
         }
@@ -454,10 +492,9 @@ where
             )
             .await?;
 
-            return Ok(crate::models::LiquidationResult::NotNeeded(format!(
-                "Simulated liquidation - would have made {} wei profit",
-                opportunity.estimated_profit
-            )));
+            return Ok(LiquidationResult::NotNeeded(
+                NotNeededReason::SimulationMode,
+            ));
         }
     }
 }
@@ -522,7 +559,7 @@ pub async fn handle_liquidation_opportunity_legacy(
     _db_pool: &DatabasePool,
     user: Address,
     min_profit_threshold: U256,
-) -> Result<()> {
+) -> Result<LiquidationResult> {
     warn!("Using legacy liquidation handler - functionality limited");
 
     // Log the opportunity (using info! macro instead of database logging)
@@ -535,5 +572,7 @@ pub async fn handle_liquidation_opportunity_legacy(
     info!("⚠️  Enhanced liquidation execution requires provider and signer");
     info!("💰 Minimum profit threshold: {} wei", min_profit_threshold);
 
-    Ok(())
+    Ok(LiquidationResult::NotNeeded(
+        NotNeededReason::SimulationMode,
+    ))
 }

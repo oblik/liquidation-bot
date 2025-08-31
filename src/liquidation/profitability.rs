@@ -6,6 +6,14 @@ use tracing::{debug, info};
 
 use crate::models::{GasEstimate, LiquidationAssetConfig, LiquidationOpportunity, UserPosition};
 
+/// Helper function to convert wei to ETH as f64 for display
+fn wei_to_eth_f64(wei: U256) -> f64 {
+    const ETH_DECIMALS: U256 = U256::from_limbs([1_000_000_000_000_000_000u64, 0, 0, 0]); // 10^18
+    let eth_u128 = (wei / ETH_DECIMALS).to::<u128>();
+    let remainder = (wei % ETH_DECIMALS).to::<u128>();
+    eth_u128 as f64 + (remainder as f64 / ETH_DECIMALS.to::<u128>() as f64)
+}
+
 // Constants for calculations
 const FLASH_LOAN_FEE_BPS: u16 = 5; // 0.05% Aave flash loan fee
 const MAX_LIQUIDATION_CLOSE_FACTOR: u16 = 5000; // 50% max liquidation
@@ -74,23 +82,42 @@ where
         profit_threshold_met,
     };
 
+    let total_costs = flash_loan_fee + gas_estimate.total_cost + swap_slippage;
+
     info!(
-        "💰 Liquidation Analysis Complete:
-        Debt to cover: {} wei
-        Collateral received: {} wei
-        Liquidation bonus: {} wei
-        Flash loan fee: {} wei
-        Gas cost: {} wei
-        Swap slippage: {} wei
-        NET PROFIT: {} wei
-        Profitable: {}",
+        "💰 DETAILED LIQUIDATION ANALYSIS:
+        📊 Amounts:
+          - Debt to cover: {} wei ({:.6} ETH)
+          - Collateral received: {} wei ({:.6} ETH)
+        💵 Revenue:
+          - Liquidation bonus: {} wei ({:.6} ETH)
+        💸 Costs:
+          - Flash loan fee: {} wei ({:.6} ETH)
+          - Gas cost: {} wei ({:.6} ETH)
+          - Swap slippage: {} wei ({:.6} ETH)
+          - Total costs: {} wei ({:.6} ETH)
+        💰 RESULT:
+          - NET PROFIT: {} wei ({:.6} ETH)
+          - Min threshold: {} wei ({:.6} ETH)
+          - Profitable: {}",
         max_debt_to_cover,
+        wei_to_eth_f64(max_debt_to_cover),
         expected_collateral,
+        wei_to_eth_f64(expected_collateral),
         liquidation_bonus,
+        wei_to_eth_f64(liquidation_bonus),
         flash_loan_fee,
+        wei_to_eth_f64(flash_loan_fee),
         gas_estimate.total_cost,
+        wei_to_eth_f64(gas_estimate.total_cost),
         swap_slippage,
+        wei_to_eth_f64(swap_slippage),
+        total_costs,
+        wei_to_eth_f64(total_costs),
         estimated_profit,
+        wei_to_eth_f64(estimated_profit),
+        min_profit_threshold,
+        wei_to_eth_f64(min_profit_threshold),
         profit_threshold_met
     );
 

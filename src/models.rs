@@ -159,3 +159,31 @@ pub struct GasEstimate {
     pub gas_limit: U256,
     pub total_cost: U256,
 }
+
+/// Result of a liquidation attempt to distinguish between executed vs not-needed liquidations
+#[derive(Debug, Clone)]
+pub enum LiquidationResult {
+    /// Liquidation was executed successfully with the given transaction hash
+    Executed(String),
+    /// No liquidation was needed (user safe, no profitable pairs, etc.)
+    NotNeeded(NotNeededReason),
+    /// Liquidation failed due to an error
+    Failed(String),
+}
+
+/// Reasons why a liquidation was not needed
+#[derive(Debug, Clone)]
+pub enum NotNeededReason {
+    /// User position not found in database
+    UserNotFound,
+    /// User has no collateral assets
+    NoCollateral,
+    /// User has no debt assets
+    NoDebt,
+    /// No profitable liquidation pairs found
+    NoProfitablePairs,
+    /// Liquidation opportunity exists but doesn't meet profit threshold
+    InsufficientProfit,
+    /// Liquidator contract or signer not configured (simulation mode)
+    SimulationMode,
+}

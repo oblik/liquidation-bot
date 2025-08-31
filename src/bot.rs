@@ -18,7 +18,7 @@ use crate::database;
 use crate::events::BotEvent;
 use crate::liquidation;
 use crate::models::{
-    AssetConfig, HardhatArtifact, LiquidationAssetConfig, PriceFeed, UserPosition,
+    AssetConfig, HardhatArtifact, LiquidationAssetConfig, LiquidationResult, PriceFeed, UserPosition,
 };
 use crate::monitoring::{discovery, oracle, scanner, websocket};
 
@@ -139,21 +139,18 @@ where
             )
             .await;
 
-            let liquidation_succeeded = matches!(
-                liquidation_result,
-                Ok(crate::models::LiquidationResult::Executed(_))
-            );
+            let liquidation_succeeded = matches!(liquidation_result, Ok(LiquidationResult::Executed(_)));
 
-            // Handle liquidation result
-            match liquidation_result {
-                Ok(crate::models::LiquidationResult::Executed(tx_hash)) => {
+            // Handle liquidation failure with fallback
+            match &liquidation_result {
+                Ok(LiquidationResult::Executed(tx_hash)) => {
                     info!("✅ Priority liquidation executed successfully for user: {:?}, TX: {}", user_address, tx_hash);
                 }
-                Ok(crate::models::LiquidationResult::NotNeeded(reason)) => {
-                    debug!("Priority liquidation not needed for user {:?}: {}", user_address, reason);
+                Ok(LiquidationResult::NotNeeded(reason)) => {
+                    info!("ℹ️ Priority liquidation not needed for user: {:?}, reason: {:?}", user_address, reason);
                 }
-                Ok(crate::models::LiquidationResult::Failed(error)) => {
-                    error!("Priority liquidation failed for user {:?}: {}", user_address, error);
+                Ok(LiquidationResult::Failed(error)) => {
+                    warn!("❌ Priority liquidation failed for user: {:?}, error: {}", user_address, error);
                 }
                 Err(e) => {
                     error!(
@@ -445,21 +442,18 @@ where
                     )
                     .await;
 
-                    let liquidation_succeeded = matches!(
-                liquidation_result,
-                Ok(crate::models::LiquidationResult::Executed(_))
-            );
+                    let liquidation_succeeded = matches!(liquidation_result, Ok(LiquidationResult::Executed(_)));
 
-                    // Handle liquidation result
-                    match liquidation_result {
-                        Ok(crate::models::LiquidationResult::Executed(tx_hash)) => {
+                    // Handle liquidation failure with fallback
+                    match &liquidation_result {
+                        Ok(LiquidationResult::Executed(tx_hash)) => {
                             info!("✅ Liquidation executed successfully for user: {:?}, TX: {}", user, tx_hash);
                         }
-                        Ok(crate::models::LiquidationResult::NotNeeded(reason)) => {
-                            debug!("Liquidation not needed for user {:?}: {}", user, reason);
+                        Ok(LiquidationResult::NotNeeded(reason)) => {
+                            info!("ℹ️ Liquidation not needed for user: {:?}, reason: {:?}", user, reason);
                         }
-                        Ok(crate::models::LiquidationResult::Failed(error)) => {
-                            error!("Liquidation failed for user {:?}: {}", user, error);
+                        Ok(LiquidationResult::Failed(error)) => {
+                            warn!("❌ Liquidation failed for user: {:?}, error: {}", user, error);
                         }
                         Err(e) => {
                             error!(
