@@ -1,8 +1,10 @@
 use alloy_contract::{ContractInstance, Interface};
+use alloy_network::EthereumWallet;
 use alloy_primitives::{Address, U256};
-use alloy_provider::Provider;
+use alloy_provider::{Provider, ProviderBuilder};
 use alloy_signer_local::PrivateKeySigner;
 use eyre::Result;
+
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::sync::Arc;
@@ -99,27 +101,173 @@ where
             alloy_dyn_abi::DynSolValue::Uint(U256::from(params.debt_asset_id), 16),
         ];
 
-        // Create transaction request
-        let call = self.liquidator_contract.function("liquidate", &args)?;
-        let _tx_req = call.into_transaction_request();
+        // Check if we should use real execution or mock (based on environment variable)
+        let use_real_execution = std::env::var("LIQUIDATION_REAL_EXECUTION")
+            .map(|v| v.to_lowercase() == "true")
+            .unwrap_or(false);
 
-        // Get gas price for logging
-        let gas_price_u128 = self.provider.get_gas_price().await?;
+        if use_real_execution {
+            self.execute_real_transaction(params, &args).await
+        } else {
+            self.execute_mock_transaction(params, &args).await
+        }
+    }
 
-        // For now, let's create the transaction bytes directly
-        // TODO: Implement proper transaction signing when alloy APIs are clearer
-        warn!("🚧 Transaction signing implementation needed");
-        warn!(
-            "Would execute liquidation with gas price: {}",
-            gas_price_u128 * 2
+    /// Execute real blockchain transaction with signing
+    async fn execute_real_transaction(
+        &self,
+        params: &LiquidationParams,
+        args: &[alloy_dyn_abi::DynSolValue],
+    ) -> Result<String> {
+        info!("🔗 EXECUTING REAL BLOCKCHAIN TRANSACTION");
+
+        // Create the transaction request from the contract call
+        let call = self.liquidator_contract.function("liquidate", args)?;
+        let mut tx_req = call.into_transaction_request();
+
+        // Get current gas price and add multiplier for competitive execution
+        let base_gas_price = self.provider.get_gas_price().await?;
+        let gas_price_multiplier = 2; // Use 2x gas price for faster execution
+        let adjusted_gas_price = base_gas_price * gas_price_multiplier;
+
+        // Set transaction parameters directly
+        tx_req.gas_price = Some(adjusted_gas_price);
+        tx_req.gas = Some(500_000); // Conservative gas limit for liquidations
+        tx_req.from = Some(self.signer.address());
+        tx_req.chain_id = Some(8453); // Base mainnet
+
+        info!(
+            "🔗 Preparing liquidation transaction: gas_price={}, gas_limit={}, from={:?}",
+            adjusted_gas_price,
+            500_000,
+            self.signer.address()
         );
-        warn!(
-            "Parameters: user={}, collateral={}, debt={}, amount={}",
-            params.user, params.collateral_asset, params.debt_asset, params.debt_to_cover
+
+        // Log the transaction details
+        info!("📋 Transaction parameters:");
+        info!("  - Function: liquidate");
+        info!("  - User: {:?}", params.user);
+        info!("  - Collateral Asset: {:?}", params.collateral_asset);
+        info!("  - Debt Asset: {:?}", params.debt_asset);
+        info!("  - Debt to Cover: {} wei", params.debt_to_cover);
+        info!("  - Gas price: {} wei", adjusted_gas_price);
+        info!("  - Gas limit: 500,000");
+        info!("  - From: {:?}", self.signer.address());
+        info!("  - Chain ID: 8453 (Base mainnet)");
+
+        // Get RPC URL from environment or use default Base mainnet
+        let rpc_url =
+            std::env::var("RPC_URL").unwrap_or_else(|_| "https://mainnet.base.org".to_string());
+
+        info!("🔗 Setting up provider with signer for real transaction execution...");
+
+        // Create wallet from the signer
+        let wallet = EthereumWallet::from(self.signer.clone());
+
+        // Create provider with signer using ProviderBuilder
+        let signer_provider = ProviderBuilder::new()
+            .with_recommended_fillers()
+            .wallet(wallet)
+            .on_http(rpc_url.parse()?);
+
+        info!("✅ Signer provider created, submitting transaction...");
+
+        // Submit the transaction using the signer provider
+        let pending_tx = signer_provider.send_transaction(tx_req).await?;
+        let tx_hash = *pending_tx.tx_hash();
+        let tx_hash_string = format!("0x{:x}", tx_hash);
+
+        info!(
+            "🚀 REAL liquidation transaction submitted successfully: {}",
+            tx_hash_string
+        );
+        info!(
+            "📊 Transaction hash: {}, waiting for confirmation...",
+            tx_hash_string
         );
 
-        // Return a mock transaction hash for now
-        let mock_tx_hash = format!("0x{:064x}", DefaultHasher::new().finish());
+        // Wait for confirmation with timeout
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            pending_tx.get_receipt(),
+        )
+        .await
+        {
+            Ok(Ok(receipt)) => {
+                if receipt.status() {
+                    info!(
+                        "✅ Transaction confirmed successfully in block: {:?}",
+                        receipt.block_number
+                    );
+                    info!("🎉 Real liquidation executed on-chain!");
+                } else {
+                    error!("❌ Transaction failed on-chain");
+                    return Err(eyre::eyre!("Transaction failed on blockchain"));
+                }
+            }
+            Ok(Err(e)) => {
+                warn!("⚠️ Could not get receipt: {}", e);
+                info!("Transaction submitted, hash: {}", tx_hash_string);
+            }
+            Err(_) => {
+                warn!("⏰ Receipt timeout - transaction may still be pending");
+                info!("Transaction submitted, hash: {}", tx_hash_string);
+            }
+        }
+
+        Ok(tx_hash_string)
+    }
+
+    /// Execute mock transaction for testing/simulation
+    async fn execute_mock_transaction(
+        &self,
+        params: &LiquidationParams,
+        _args: &[alloy_dyn_abi::DynSolValue],
+    ) -> Result<String> {
+        info!("🎭 EXECUTING MOCK TRANSACTION (simulation mode)");
+
+        // Get current gas price and add multiplier for realistic simulation
+        let base_gas_price = self.provider.get_gas_price().await?;
+        let gas_price_multiplier = 2; // Use 2x gas price for faster execution
+        let adjusted_gas_price = base_gas_price * gas_price_multiplier;
+
+        // Get nonce for the signer for realistic simulation
+        let nonce = self
+            .provider
+            .get_transaction_count(self.signer.address())
+            .await?;
+
+        info!(
+            "🔗 Simulating liquidation transaction with gas price: {} ({}x multiplier), gas limit: {}, nonce: {}",
+            adjusted_gas_price, gas_price_multiplier, 500_000, nonce
+        );
+
+        // Log detailed transaction parameters that would be used
+        info!("📋 Transaction parameters:");
+        info!("  - User: {:?}", params.user);
+        info!("  - Collateral Asset: {:?}", params.collateral_asset);
+        info!("  - Debt Asset: {:?}", params.debt_asset);
+        info!("  - Debt to Cover: {} wei", params.debt_to_cover);
+        info!("  - Gas price: {} wei", adjusted_gas_price);
+        info!("  - Gas limit: 500,000");
+        info!("  - From: {:?}", self.signer.address());
+        info!("  - Nonce: {}", nonce);
+        info!("  - Chain ID: 8453 (Base mainnet)");
+
+        // Create deterministic mock transaction hash for testing
+        let mut hasher = DefaultHasher::new();
+        hasher.write_u128(adjusted_gas_price);
+        hasher.write_u64(nonce);
+        hasher.write(params.user.as_slice());
+        hasher.write(params.collateral_asset.as_slice());
+        hasher.write(params.debt_asset.as_slice());
+        let mock_tx_hash = format!("0x{:064x}", hasher.finish());
+
+        info!("🎭 Mock transaction hash generated: {}", mock_tx_hash);
+        warn!("⚠️  This is a MOCK transaction - no real on-chain execution occurred");
+        warn!(
+            "⚠️  Set LIQUIDATION_REAL_EXECUTION=true environment variable to enable real execution"
+        );
 
         Ok(mock_tx_hash)
     }
@@ -177,8 +325,11 @@ where
         if let Some(asset_config) = self.asset_configs.get(&asset_address) {
             Ok(asset_config.asset_id)
         } else {
-            error!("Asset address {:#x} not found in asset configurations. Available assets: {:?}", 
-                   asset_address, self.asset_configs.keys().collect::<Vec<_>>());
+            error!(
+                "Asset address {:#x} not found in asset configurations. Available assets: {:?}",
+                asset_address,
+                self.asset_configs.keys().collect::<Vec<_>>()
+            );
             Err(eyre::eyre!("Unknown asset address: {:#x}", asset_address))
         }
     }
