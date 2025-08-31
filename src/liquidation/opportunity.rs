@@ -275,6 +275,7 @@ pub async fn handle_liquidation_opportunity<P>(
     signer: Option<alloy_signer_local::PrivateKeySigner>,
     pool_contract: &ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     asset_configs: &std::collections::HashMap<Address, LiquidationAssetConfig>,
+    rpc_url: &str,
 ) -> Result<LiquidationResult>
 where
     P: Provider + 'static,
@@ -396,7 +397,8 @@ where
                 signer,
                 contract_addr,
                 asset_configs.clone(),
-            )?;
+                rpc_url.to_string(),
+            )?
 
             // Verify contract setup
             if let Err(e) = executor.verify_contract_setup().await {

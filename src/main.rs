@@ -25,11 +25,13 @@ async fn main() -> Result<()> {
 
     // Build HTTP provider
     let url = url::Url::parse(&config.rpc_url)?;
-    let provider = ProviderBuilder::new().on_http(url).boxed();
+    
+    // Create a provider for reading blockchain state
+    // The signer will be used separately for sending transactions
+    let provider = ProviderBuilder::new().on_http(url.clone()).boxed();
     let provider = Arc::new(provider);
     info!("HTTP Provider connected to: {}", config.rpc_url);
 
-    // Signer will be passed to the bot for transaction signing
     info!("✅ Signer ready for transaction signing");
     info!("WebSocket will connect to: {}", config.ws_url);
 

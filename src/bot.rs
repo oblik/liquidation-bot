@@ -135,6 +135,7 @@ where
                 Some(self.signer.clone()),
                 &self.pool_contract,
                 &self.liquidation_assets,
+                &self.config.rpc_url,
             )
             .await;
 
@@ -437,6 +438,7 @@ where
                         Some(self.signer.clone()),
                         &self.pool_contract,
                         &self.liquidation_assets,
+                        &self.config.rpc_url,
                     )
                     .await;
 

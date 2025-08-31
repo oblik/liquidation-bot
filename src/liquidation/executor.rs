@@ -4,7 +4,6 @@ use alloy_primitives::{Address, U256};
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_signer_local::PrivateKeySigner;
 use eyre::Result;
-
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::sync::Arc;
@@ -19,6 +18,8 @@ pub struct LiquidationExecutor<P> {
     liquidator_contract: ContractInstance<alloy_transport::BoxTransport, Arc<P>>,
     contract_address: Address,
     asset_configs: std::collections::HashMap<Address, LiquidationAssetConfig>,
+    contract_interface: Interface,
+    rpc_url: String,
 }
 
 impl<P> LiquidationExecutor<P>
@@ -31,11 +32,14 @@ where
         signer: PrivateKeySigner,
         contract_address: Address,
         asset_configs: std::collections::HashMap<Address, LiquidationAssetConfig>,
+        rpc_url: String,
     ) -> Result<Self> {
         // Load the ABI from deployment info or hardcoded
         let liquidator_abi = get_liquidator_abi()?;
         let interface = Interface::new(liquidator_abi);
-        let liquidator_contract = interface.connect(contract_address, provider.clone());
+        let liquidator_contract = interface
+            .clone()
+            .connect(contract_address, provider.clone());
 
         Ok(Self {
             provider,
@@ -43,6 +47,8 @@ where
             liquidator_contract,
             contract_address,
             asset_configs,
+            contract_interface: interface,
+            rpc_url,
         })
     }
 
@@ -271,6 +277,8 @@ where
 
         Ok(mock_tx_hash)
     }
+    }
+
 
     /// Wait for transaction confirmation
     async fn wait_for_confirmation(&self, tx_hash: &str) -> Result<()> {
