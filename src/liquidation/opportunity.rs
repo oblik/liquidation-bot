@@ -291,16 +291,18 @@ where
             "User {:?} has no collateral assets - cannot liquidate",
             user
         );
-        return Ok(crate::models::LiquidationResult::NotNeeded(
-            format!("User {:?} has no collateral assets", user),
-        ));
+        return Ok(crate::models::LiquidationResult::NotNeeded(format!(
+            "User {:?} has no collateral assets",
+            user
+        )));
     }
 
     if user_debt_assets.is_empty() {
         warn!("User {:?} has no debt assets - nothing to liquidate", user);
-        return Ok(crate::models::LiquidationResult::NotNeeded(
-            format!("User {:?} has no debt assets", user),
-        ));
+        return Ok(crate::models::LiquidationResult::NotNeeded(format!(
+            "User {:?} has no debt assets",
+            user
+        )));
     }
 
     // Find the most profitable liquidation pair by simulating all viable combinations
@@ -317,9 +319,10 @@ where
         Some(opp) => opp,
         None => {
             warn!("No profitable liquidation pair found for user: {:?}", user);
-            return Ok(crate::models::LiquidationResult::NotNeeded(
-                format!("No profitable liquidation pair found for user: {:?}", user),
-            ));
+            return Ok(crate::models::LiquidationResult::NotNeeded(format!(
+                "No profitable liquidation pair found for user: {:?}",
+                user
+            )));
         }
     };
 
@@ -338,9 +341,10 @@ where
         )
         .await?;
 
-        return Ok(crate::models::LiquidationResult::NotNeeded(
-            format!("Liquidation rejected: profit {} < threshold {} wei", opportunity.estimated_profit, min_profit_threshold),
-        ));
+        return Ok(crate::models::LiquidationResult::NotNeeded(format!(
+            "Liquidation rejected: profit {} < threshold {} wei",
+            opportunity.estimated_profit, min_profit_threshold
+        )));
     }
 
     info!("✅ Liquidation opportunity validated - proceeding with execution");
@@ -381,7 +385,7 @@ where
 
                     // Save liquidation record
                     save_liquidation_record(db_pool, &opportunity, &tx_hash).await?;
-                    
+
                     return Ok(crate::models::LiquidationResult::Executed(tx_hash));
                 }
                 Err(e) => {
@@ -425,7 +429,7 @@ where
                         );
                     }
 
-                    return Err(e);
+                    return Ok(crate::models::LiquidationResult::Failed(e.to_string()));
                 }
             }
         }
@@ -447,10 +451,11 @@ where
                 )),
             )
             .await?;
-            
-            return Ok(crate::models::LiquidationResult::NotNeeded(
-                format!("Simulated liquidation - would have made {} wei profit", opportunity.estimated_profit),
-            ));
+
+            return Ok(crate::models::LiquidationResult::NotNeeded(format!(
+                "Simulated liquidation - would have made {} wei profit",
+                opportunity.estimated_profit
+            )));
         }
     }
 }
