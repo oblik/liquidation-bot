@@ -1,0 +1,136 @@
+[
+{
+  "timestamp": "2025-09-01T00:11:01.349808Z",
+  "block_number": 34948057,
+  "transaction_hash": "0x2d7a8de1bd1840aa90aa543e66a6498858a4413003c831aaa2d17b79e37576d5",
+  "collateral_asset": "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22",
+  "debt_asset": "0x6bb7a212910682dcfdbd5bcbb3e28fb4e8da10ee",
+  "user": "0x66d02ff4a7be3b6c5d646d0e08e7b235bd39d8a1",
+  "liquidator": "0x920546607200b26e018fe559fe2005fc17edecfb",
+  "debt_to_cover": "0x1d26cb4192da846",
+  "liquidated_collateral_amount": "0x1a299b085376",
+  "receive_atoken": false,
+  "gas_used": null,
+  "effective_gas_price": null
+}
+,
+{
+  "timestamp": "2025-09-01T04:19:58.048471Z",
+  "block_number": 34955523,
+  "transaction_hash": "0x68f657c2fec000298400bbd3899358ec7391d0fa918cc8a6d410bad407cd70c3",
+  "collateral_asset": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+  "debt_asset": "0x6bb7a212910682dcfdbd5bcbb3e28fb4e8da10ee",
+  "user": "0xf76aea9de964e307c6170a6637ee4d7c77d59787",
+  "liquidator": "0x920546607200b26e018fe559fe2005fc17edecfb",
+  "debt_to_cover": "0xe33051c1436e32",
+  "liquidated_collateral_amount": "0x3f",
+  "receive_atoken": false,
+  "gas_used": null,
+  "effective_gas_price": null
+}
+,
+{
+  "timestamp": "2025-09-01T04:22:56.233884Z",
+  "block_number": 34955556,
+  "transaction_hash": "0x991f0f37cb1704807ce51421c697d948c1ed417d46ec4f365f3afb706b745dca",
+  "collateral_asset": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+  "debt_asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "user": "0x41ea505f369313653e35a824919abd10ec4f7775",
+  "liquidator": "0x920546607200b26e018fe559fe2005fc17edecfb",
+  "debt_to_cover": "0x149d5",
+  "liquidated_collateral_amount": "0x53",
+  "receive_atoken": false,
+  "gas_used": null,
+  "effective_gas_price": null
+}
+,
+{
+  "timestamp": "2025-09-01T09:27:41.079784Z",
+  "block_number": 34964756,
+  "transaction_hash": "0x7a991404051abc3d659dc6e29db8d956aaed9a1f5fac49026a7d81e62c5444ad",
+  "collateral_asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "debt_asset": "0x4200000000000000000000000000000000000006",
+  "user": "0x700de42771c1a2429694dae6fd618cde36a8a88b",
+  "liquidator": "0x55161572fde76e83a6676f38d89420d9961951e7",
+  "debt_to_cover": "0x169a7b450aac",
+  "liquidated_collateral_amount": "0x1c656",
+  "receive_atoken": false,
+  "gas_used": null,
+  "effective_gas_price": null
+}
+,
+{
+  "timestamp": "2025-09-01T09:27:55.039325Z",
+  "block_number": 34964763,
+  "transaction_hash": "0xefe88b03b8ff0f949f6880cbb9c69b67d18aa00bbbf29a5d538f2650a8690e92",
+  "collateral_asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "debt_asset": "0x4200000000000000000000000000000000000006",
+  "user": "0xe41861fac3200e18d009f5cbd8dd917f688eb3fb",
+  "liquidator": "0x55161572fde76e83a6676f38d89420d9961951e7",
+  "debt_to_cover": "0x168fd436fc5c",
+  "liquidated_collateral_amount": "0x1c580",
+  "receive_atoken": false,
+  "gas_used": null,
+  "effective_gas_price": null
+}
+,
+{
+  "timestamp": "2025-09-01T09:31:00.078998Z",
+  "block_number": 34964856,
+  "transaction_hash": "0x65a47752ecb748e88fda53594c6d689e25b711793b6b8af4db21e1f761eb9f67",
+  "collateral_asset": "0x4200000000000000000000000000000000000006",
+  "debt_asset": "0x04c0599ae5a44757c0af6f9ec3b93da8976c150a",
+  "user": "0xb8a68465da216980e6399451510ebc873c5306aa",
+  "liquidator": "0x55161572fde76e83a6676f38d89420d9961951e7",
+  "debt_to_cover": "0x117685a37cc6",
+  "liquidated_collateral_amount": "0x13a1a2bb29f7",
+  "receive_atoken": false,
+  "gas_used": null,
+  "effective_gas_price": null
+}
+,
+{
+  "timestamp": "2025-09-01T09:31:09.619192Z",
+  "block_number": 34964861,
+  "transaction_hash": "0x5694ce0da6968116c482b7460d1c36988c71bb31c548ebd87ba0ad15fd87ab52",
+  "collateral_asset": "0x4200000000000000000000000000000000000006",
+  "debt_asset": "0x04c0599ae5a44757c0af6f9ec3b93da8976c150a",
+  "user": "0xf315f9dc7f04524994124a099d18ec2fb53250c6",
+  "liquidator": "0x55161572fde76e83a6676f38d89420d9961951e7",
+  "debt_to_cover": "0x16638c9f9bce",
+  "liquidated_collateral_amount": "0x192b3f4a50ff",
+  "receive_atoken": false,
+  "gas_used": null,
+  "effective_gas_price": null
+}
+,
+{
+  "timestamp": "2025-09-01T09:31:20.431858Z",
+  "block_number": 34964866,
+  "transaction_hash": "0x5f3ef79017554d3a9f6f42e4a16a8f0302c6c9820fbb15a22f3bdaec00be5ac3",
+  "collateral_asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "debt_asset": "0x4200000000000000000000000000000000000006",
+  "user": "0xfed5b47f08db735f46f104388292483ce1df9d5b",
+  "liquidator": "0x55161572fde76e83a6676f38d89420d9961951e7",
+  "debt_to_cover": "0x1675ad7245ec",
+  "liquidated_collateral_amount": "0x1c354",
+  "receive_atoken": false,
+  "gas_used": null,
+  "effective_gas_price": null
+}
+,
+{
+  "timestamp": "2025-09-01T09:31:37.061223Z",
+  "block_number": 34964874,
+  "transaction_hash": "0xdd16ad6d50306e029e39d326a267240f258f1f119d714cce93fba50b14c39170",
+  "collateral_asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+  "debt_asset": "0x4200000000000000000000000000000000000006",
+  "user": "0xd00142832f1d092e5a42b6ad3d58abcf9e6a8f48",
+  "liquidator": "0x55161572fde76e83a6676f38d89420d9961951e7",
+  "debt_to_cover": "0x1673fb05f4de",
+  "liquidated_collateral_amount": "0x1c332",
+  "receive_atoken": false,
+  "gas_used": null,
+  "effective_gas_price": null
+}
+]
