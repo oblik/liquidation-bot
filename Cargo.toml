@@ -7,6 +7,10 @@ edition = "2021"
 name = "liquidation-monitor"
 path = "src/bin/liquidation_monitor.rs"
 
+[[bin]]
+name = "simulate"
+path = "src/bin/simulate.rs"
+
 [dependencies]
 # Core async runtime
 tokio = { version = "1.0", features = ["full"] }
@@ -44,7 +48,7 @@ sqlx = { version = "0.7", features = [
 ] }
 
 # HTTP client
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 
 # Logging and tracing
 tracing = "0.1"
@@ -68,4 +72,7 @@ thiserror = "1.0"
 async-trait = "0.1"
 
 # CLI parsing
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
+
+# Hex encoding
+hex = "0.4"

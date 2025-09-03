@@ -6,6 +6,7 @@ pub mod liquidation;
 pub mod models;
 pub mod monitoring;
 pub mod circuit_breaker;
+pub mod sim;
 
 pub use bot::LiquidationBot;
 pub use config::BotConfig;

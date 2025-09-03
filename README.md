@@ -153,6 +153,43 @@ The circuit breaker provides multiple layers of protection:
 3. **Gas Protection**: Avoids expensive transactions during network congestion
 4. **Manual Override**: Emergency controls for operators
 
+### Simulation (Tenderly)
+
+This repo includes a CLI to simulate liquidation transactions on **Base** using Tenderly.
+
+1. Create a Tenderly account/project. Generate a Personal Access Token.
+2. Add `.env`:
+```
+TENDERLY_ACCOUNT=...
+TENDERLY_PROJECT=...
+TENDERLY_ACCESS_KEY=...
+TENDERLY_NETWORK=base-mainnet
+BOT_ADDRESS=0xYourBotEOA
+```
+3. Build:
+```
+cargo build --bin simulate
+```
+4. Run:
+```
+cargo run --bin simulate -- \
+  --block 12345678 \
+  --from 0xYourBotEOA \
+  --to 0xProtocolOrHelper \
+  --input 0x<calldata> \
+  --gas-price 1000000
+```
+
+Output:
+- `status` (succeeded/failed)
+- `gas_used` and `gas_cost_wei` (if `--gas-price` provided)
+- Per-asset `balance_changes` for the bot address (raw deltas in smallest units)
+
+Notes:
+- Pin `--block` for determinism.
+- Provide realistic `--gas-price` to get net gas cost.
+- This CLI is offline testing only; wire into runtime decisioning later.
+
 ### Contributing
 
 Contributions are welcome! Please ensure any new features include:
